@@ -188,10 +188,14 @@ scripts/
 
 ## Versions TIA Portal supportees
 
-L'application detecte automatiquement les DLL dans :
+L'application detecte automatiquement les DLL Openness dans les deux layouts Siemens :
 
 ```
+# Ancien layout mono-DLL (V15-V19)
 C:\Program Files\Siemens\Automation\Portal V{XX}\PublicAPI\V{XX}\Siemens.Engineering.dll
+
+# Nouveau layout eclate (V20/V21+)
+C:\Program Files\Siemens\Automation\Portal V{XX}\PublicAPI\V{XX}\net48\Siemens.Engineering.Base.dll
 ```
 
 | Version | Fichier projet | Statut |
