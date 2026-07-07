@@ -5,7 +5,7 @@ $Script:AppState = @{
     # TIA Portal Version
     SelectedVersion    = $null           # e.g. "V19"
     InstalledVersions  = @()             # List of @{Version; MajorNumber; DllPath}
-    DllPath            = $null           # Full path to loaded Siemens.Engineering.dll
+    DllPath            = $null           # Full path to the Openness entry assembly (legacy Siemens.Engineering.dll, or Siemens.Engineering.Base.dll for the V20+ layout)
     DllLoaded          = $false          # Whether DLL was loaded successfully
 
     # Connection
