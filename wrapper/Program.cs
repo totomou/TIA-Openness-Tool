@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -11,6 +12,17 @@ static class Program
     const string ExeName = "TiaOpennessTool.exe";
     const string GitHubApiUrl = "https://api.github.com/repos/JohannPx/TIA-Openness-Tool/releases/latest";
     const string ResourceName = "TiaOpennessTool.TIA-Openness-Tool_latest.ps1";
+    const string ErrorLogName = "TIA_Openness_Error.log";
+
+    // Codes de sortie NTSTATUS signalant une mort brutale du process PowerShell : le CLR ou le
+    // système l'a tué sans qu'aucun code managé ne puisse s'exécuter. Le script hôte ne peut donc
+    // rien avoir journalisé lui-même — ces cas sont les seuls à mériter une alerte à l'utilisateur.
+    const int StatusAccessViolation = unchecked((int)0xC0000005);
+    const int StatusStackOverflow = unchecked((int)0xC00000FD);
+    const int StatusStackBufferOverrun = unchecked((int)0xC0000409);
+    const int StatusClrUnhandledException = unchecked((int)0xE0434352);
+
+    const uint MbIconError = 0x00000010;
 
     // Variable d'environnement transmise au script PowerShell quand une mise à jour est
     // disponible mais que son téléchargement a échoué : l'app affiche alors un bandeau.
@@ -237,10 +249,65 @@ static class Program
 
             var proc = Process.Start(psi);
             proc?.WaitForExit();
+            if (proc != null && proc.ExitCode != 0)
+                ReportAbnormalExit(proc.ExitCode);
         }
         finally
         {
             try { File.Delete(scriptPath); } catch { }
         }
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    /// <summary>
+    /// Journalise une fin anormale du process PowerShell, et prévient l'utilisateur quand le
+    /// process a été tué par le CLR ou le système.
+    /// </summary>
+    /// <remarks>
+    /// Sur une mort brutale (débordement de pile, violation d'accès), aucun code managé ne
+    /// s'exécute plus dans le process hôte : ni le try/catch du script, ni un handler
+    /// <c>AppDomain.UnhandledException</c> — que <c>powershell.exe</c> n'invoque de toute façon
+    /// pas. Le code de sortie observé depuis le wrapper, qui survit à l'enfant, est alors la
+    /// seule information exploitable ; sans lui l'application « se ferme » sans laisser de trace.
+    /// </remarks>
+    static void ReportAbnormalExit(int exitCode)
+    {
+        var cause = DescribeExitCode(exitCode);
+
+        try
+        {
+            var log = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Desktop), ErrorLogName);
+            File.AppendAllText(log,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Arrêt anormal de l'application — " +
+                $"code de sortie 0x{exitCode:X8}{(cause == null ? "" : $" ({cause})")}" +
+                Environment.NewLine + Environment.NewLine);
+        }
+        catch { }
+
+        // Une sortie non nulle « ordinaire » (erreur de script) a déjà été signalée par
+        // l'application elle-même : ne pas doubler le message.
+        if (cause == null)
+            return;
+
+        MessageBoxW(IntPtr.Zero,
+            $"{AppName} s'est arrêté de façon inattendue ({cause}).\n\n" +
+            $"Un rapport a été ajouté sur le Bureau dans « {ErrorLogName} ».\n" +
+            "Merci de le joindre en cas de signalement du problème.",
+            AppName, MbIconError);
+    }
+
+    /// <summary>
+    /// Décrit un code de sortie fatal connu, ou <c>null</c> si l'arrêt relève d'une erreur
+    /// applicative ordinaire déjà remontée par l'application.
+    /// </summary>
+    static string? DescribeExitCode(int exitCode) => exitCode switch
+    {
+        StatusStackOverflow or StatusStackBufferOverrun => "débordement de pile",
+        StatusAccessViolation => "violation d'accès mémoire",
+        StatusClrUnhandledException => "exception .NET non gérée",
+        _ => null
+    };
 }

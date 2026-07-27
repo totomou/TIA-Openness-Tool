@@ -79,9 +79,11 @@ try {
         $errMsg += "`n-> $($inner.Message)"
         $inner = $inner.InnerException
     }
-    # Log to file for debugging
+    # Journalisation : ajout en fin de fichier, le wrapper ecrivant dans le meme journal les
+    # arrets anormaux du process (une trace precedente ne doit pas etre ecrasee).
     $logPath = Join-Path ([Environment]::GetFolderPath('Desktop')) "TIA_Openness_Error.log"
-    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $errMsg`n$($_.ScriptStackTrace)" | Out-File $logPath -Encoding UTF8
+    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $errMsg`n$($_.ScriptStackTrace)`n" |
+        Out-File $logPath -Encoding UTF8 -Append
     # Show console again for error display
     if ($consoleHwnd -ne [IntPtr]::Zero) {
         [Native.Win32]::ShowWindow($consoleHwnd, 5) | Out-Null  # SW_SHOW
