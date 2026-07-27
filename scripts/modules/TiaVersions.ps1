@@ -53,6 +53,38 @@ function Get-InstalledTiaVersions {
     return $versions | Sort-Object { $_.MajorNumber }
 }
 
+# Handler AssemblyResolve, en C# compile et NON en ScriptBlock PowerShell. Openness declenche
+# la resolution d'assemblies depuis ses propres threads (remoting / threadpool), qui n'ont pas
+# de runspace : y invoquer un ScriptBlock relance a son tour des chargements d'assemblies, donc
+# l'evenement en boucle -> StackOverflowException, qui tue le process instantanement et sans
+# trace (l'appli "se ferme" a la connexion). Un delegue compile n'a aucune de ces dependances.
+$Script:OpennessResolverSource = @'
+using System;
+using System.IO;
+using System.Reflection;
+
+public static class OpennessAssemblyResolver {
+    private static string _probeDir;
+    private static bool _registered;
+
+    public static void Register(string probeDir) {
+        _probeDir = probeDir;
+        if (_registered) { return; }
+        _registered = true;
+        AppDomain.CurrentDomain.AssemblyResolve += Resolve;
+    }
+
+    private static Assembly Resolve(object sender, ResolveEventArgs args) {
+        try {
+            string simpleName = args.Name.Split(',')[0].Trim();
+            string candidate = Path.Combine(_probeDir, simpleName + ".dll");
+            if (File.Exists(candidate)) { return Assembly.LoadFrom(candidate); }
+        } catch { }
+        return null;
+    }
+}
+'@
+
 function Register-OpennessAssemblyResolver {
     # Enregistre (une seule fois) un handler AssemblyResolve qui sonde le dossier de l'API
     # Openness. Indispensable pour le nouveau layout (V20+), ou les assemblies compagnons
@@ -61,21 +93,14 @@ function Register-OpennessAssemblyResolver {
     param([string]$ProbeDir)
 
     if (-not $ProbeDir) { return }
-    $already = [bool](Get-Variable -Name OpennessResolverRegistered -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
-    if ($already) { return }
 
-    $resolver = {
-        param($sender, $eventArgs)
-        $simpleName = ($eventArgs.Name -split ',')[0].Trim()
-        $candidate = Join-Path $ProbeDir ($simpleName + '.dll')
-        if (Test-Path $candidate) {
-            try { return [System.Reflection.Assembly]::LoadFrom($candidate) } catch { return $null }
-        }
-        return $null
-    }.GetNewClosure()
+    # Compilation paresseuse : evite le cout d'un Add-Type au demarrage, le resolver n'etant
+    # necessaire qu'au premier chargement de DLL Openness (scan / connexion).
+    if (-not ('OpennessAssemblyResolver' -as [type])) {
+        Add-Type -TypeDefinition $Script:OpennessResolverSource
+    }
 
-    [System.AppDomain]::CurrentDomain.add_AssemblyResolve($resolver)
-    Set-Variable -Name OpennessResolverRegistered -Scope Script -Value $true
+    [OpennessAssemblyResolver]::Register($ProbeDir)
 }
 
 function Initialize-TiaOpenness {
