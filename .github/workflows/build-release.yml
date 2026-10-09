@@ -75,6 +75,7 @@ jobs:
             ./scripts/modules/TiaConnection.ps1 \
             ./scripts/modules/TiaDataBlocks.ps1 \
             ./scripts/modules/TiaExportTable.ps1 \
+            ./scripts/modules/TiaUsersRoles.ps1 \
             ./scripts/modules/UIHelpers.ps1 \
             ./scripts/modules/UI.ps1; do
             LC_ALL=C sed '1s/^\xEF\xBB\xBF//' "$f" >> ./TIA-Openness-Tool_latest.ps1

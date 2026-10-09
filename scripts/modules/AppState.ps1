@@ -37,6 +37,9 @@ $Script:AppState = @{
     EwonTopic          = "A"            # Topic: A, B, or C
     EwonPageId         = 1              # Page: 1-11
 
+    # Users & roles (UMAC)
+    UmacItems          = @()             # List of @{Source; Kind; Type; Name; Attributes; Relations}
+
     # Runtime
     IsExporting        = $false
 

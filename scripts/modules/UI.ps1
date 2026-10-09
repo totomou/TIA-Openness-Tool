@@ -169,6 +169,11 @@ $Script:MainXaml = @'
             <TextBlock x:Name="txtNavExport" Text="Export DataBlocks" FontSize="13"
                        Foreground="#4A5568"/>
           </Button>
+          <Button x:Name="btnNavUsers" Height="44" Background="Transparent"
+                  BorderThickness="0" HorizontalContentAlignment="Left" Padding="16,0" Cursor="Hand">
+            <TextBlock x:Name="txtNavUsers" Text="Utilisateurs &amp; roles" FontSize="13"
+                       Foreground="#4A5568"/>
+          </Button>
         </StackPanel>
 
         <Control/>
@@ -339,6 +344,80 @@ $Script:MainXaml = @'
         </Border>
       </Grid>
 
+      <!-- ===== PAGE: Users & roles (UMAC) ===== -->
+      <Grid x:Name="pnlUsers" Visibility="Collapsed">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="150"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" x:Name="txtUsersTitle" Text="Utilisateurs &amp; roles du projet"
+                   Style="{StaticResource PageHeader}"/>
+        <TextBlock Grid.Row="1" x:Name="txtUsersInfo" Style="{StaticResource SubText}"
+                   TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="2" Margin="0,0,0,8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Button x:Name="btnLoadUsers" Grid.Column="0" Content="Charger"
+                  Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
+                  Background="White" BorderBrush="#CBD5E0" BorderThickness="1"/>
+          <Button x:Name="btnExportUsers" Grid.Column="1" Content="Exporter JSON..."
+                  Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
+                  Background="#27AE60" Foreground="White" BorderThickness="0"/>
+          <Button x:Name="btnImportUsers" Grid.Column="2" Content="Importer JSON..."
+                  Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
+                  Background="#1A5276" Foreground="White" BorderThickness="0"/>
+          <Button x:Name="btnDiagUsers" Grid.Column="3" Content="Diagnostic"
+                  Height="32" FontSize="12" Cursor="Hand" Padding="14,0"
+                  Background="White" BorderBrush="#CBD5E0" BorderThickness="1"/>
+          <Border Grid.Column="5" Background="#EDF2F7" Padding="12,4" CornerRadius="3"
+                  VerticalAlignment="Center">
+            <TextBlock x:Name="txtUsersCount" Text="0" FontWeight="SemiBold"
+                       Foreground="#4A5568" FontSize="12"/>
+          </Border>
+        </Grid>
+
+        <!-- Users / roles list -->
+        <Border Grid.Row="3" Background="White" BorderBrush="#E2E8F0" BorderThickness="1"
+                CornerRadius="4">
+          <ListBox x:Name="lbUsers" BorderThickness="0" Background="Transparent"
+                   HorizontalContentAlignment="Stretch"
+                   VirtualizingStackPanel.IsVirtualizing="True"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+        </Border>
+
+        <!-- Import options -->
+        <Border Grid.Row="4" Background="#FFF7ED" BorderBrush="#FED7AA" BorderThickness="1"
+                CornerRadius="4" Padding="12" Margin="0,8,0,8">
+          <StackPanel Orientation="Horizontal">
+            <CheckBox x:Name="chkUsersDryRun" Content="Simulation" IsChecked="True"
+                      VerticalAlignment="Center" FontSize="12" Margin="0,0,24,0"/>
+            <TextBlock x:Name="txtUsersPasswordLabel" Text="Mot de passe initial :" FontSize="12"
+                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <PasswordBox x:Name="pwdUsersInitial" Width="180" Height="28" FontSize="12"
+                         Padding="4,2" VerticalContentAlignment="Center"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Log -->
+        <TextBox Grid.Row="5" x:Name="txtUsersLog" IsReadOnly="True" TextWrapping="NoWrap"
+                 FontFamily="Consolas" FontSize="11" Background="White"
+                 BorderBrush="#E2E8F0" VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"/>
+      </Grid>
+
     </Grid>
   </DockPanel>
 </Window>
@@ -440,7 +519,11 @@ function Initialize-MainWindow {
         "brdFormatConfig", "txtExportFormatLabel", "cbExportFormat",
         "pnlEwonConfig", "txtEwonRepereLabel", "txtEwonRepere",
         "txtEwonTopicLabel", "cbEwonTopic", "txtEwonPageLabel", "cbEwonPage",
-        "txtExportFolderLabel", "txtExportFolder", "btnBrowseFolder", "btnExportCsv"
+        "txtExportFolderLabel", "txtExportFolder", "btnBrowseFolder", "btnExportCsv",
+        "btnNavUsers", "txtNavUsers",
+        "pnlUsers", "txtUsersTitle", "txtUsersInfo",
+        "btnLoadUsers", "btnExportUsers", "btnImportUsers", "btnDiagUsers", "txtUsersCount",
+        "lbUsers", "chkUsersDryRun", "txtUsersPasswordLabel", "pwdUsersInitial", "txtUsersLog"
     )
     foreach ($name in $elementNames) {
         $el = $Script:ui_Window.FindName($name)
@@ -460,6 +543,7 @@ function Initialize-MainWindow {
     Register-LanguageEvents
     Register-ConnectionEvents
     Register-ExportEvents
+    Register-UsersEvents
     Initialize-UpdateBanner
 
     # Window close guard
@@ -656,6 +740,23 @@ function Update-AllTexts {
         default { $Script:ui_btnExportCsv.ToolTip = T "TipExportCsv" }
     }
     $Script:ui_btnBrowseFolder.ToolTip = T "TipBrowse"
+
+    # Users & roles page
+    $Script:ui_txtNavUsers.Text = T "NavUsers"
+    $Script:ui_txtUsersTitle.Text = T "PageUsers"
+    $Script:ui_txtUsersInfo.Text = T "LblUsersInfo"
+    $Script:ui_btnLoadUsers.Content = T "BtnLoadUsers"
+    $Script:ui_btnExportUsers.Content = T "BtnExportUsers"
+    $Script:ui_btnImportUsers.Content = T "BtnImportUsers"
+    $Script:ui_btnDiagUsers.Content = T "BtnDiagUsers"
+    $Script:ui_chkUsersDryRun.Content = T "LblUsersDryRun"
+    $Script:ui_txtUsersPasswordLabel.Text = T "LblUsersPassword"
+    $Script:ui_btnLoadUsers.ToolTip = T "TipLoadUsers"
+    $Script:ui_btnExportUsers.ToolTip = T "TipExportUsers"
+    $Script:ui_btnImportUsers.ToolTip = T "TipImportUsers"
+    $Script:ui_btnDiagUsers.ToolTip = T "TipDiagUsers"
+    $Script:ui_pwdUsersInitial.ToolTip = T "TipUsersPassword"
+    Refresh-UmacList
 }
 
 # =================== UPDATE BANNER ===================
@@ -682,34 +783,34 @@ function Initialize-UpdateBanner {
 
 # =================== NAVIGATION EVENTS ===================
 
+function Set-ActivePage {
+    # Affiche la page demandee (Connection | Export | Users) et met en surbrillance son entree
+    # de navigation.
+    param([string]$Page)
+
+    $b = [System.Windows.Media.BrushConverter]::new()
+    foreach ($name in @("Connection", "Export", "Users")) {
+        $panel = Get-Variable -Name "ui_pnl$name" -Scope Script -ValueOnly
+        $btn = Get-Variable -Name "ui_btnNav$name" -Scope Script -ValueOnly
+        $txt = Get-Variable -Name "ui_txtNav$name" -Scope Script -ValueOnly
+        if ($name -eq $Page) {
+            $panel.Visibility = [System.Windows.Visibility]::Visible
+            $btn.Background = $b.ConvertFrom("#EAF2F8")
+            $txt.Foreground = $b.ConvertFrom("#1A5276")
+            $txt.FontWeight = [System.Windows.FontWeights]::SemiBold
+        } else {
+            $panel.Visibility = [System.Windows.Visibility]::Collapsed
+            $btn.Background = [System.Windows.Media.Brushes]::Transparent
+            $txt.Foreground = $b.ConvertFrom("#4A5568")
+            $txt.FontWeight = [System.Windows.FontWeights]::Normal
+        }
+    }
+}
+
 function Register-NavigationEvents {
-    $brush = [System.Windows.Media.BrushConverter]::new()
-
-    $Script:ui_btnNavConnection.Add_Click({
-        $Script:ui_pnlConnection.Visibility = [System.Windows.Visibility]::Visible
-        $Script:ui_pnlExport.Visibility = [System.Windows.Visibility]::Collapsed
-        # Highlight active nav
-        $b = [System.Windows.Media.BrushConverter]::new()
-        $Script:ui_btnNavConnection.Background = $b.ConvertFrom("#EAF2F8")
-        $Script:ui_txtNavConnection.Foreground = $b.ConvertFrom("#1A5276")
-        $Script:ui_txtNavConnection.FontWeight = [System.Windows.FontWeights]::SemiBold
-        $Script:ui_btnNavExport.Background = [System.Windows.Media.Brushes]::Transparent
-        $Script:ui_txtNavExport.Foreground = $b.ConvertFrom("#4A5568")
-        $Script:ui_txtNavExport.FontWeight = [System.Windows.FontWeights]::Normal
-    })
-
-    $Script:ui_btnNavExport.Add_Click({
-        $Script:ui_pnlConnection.Visibility = [System.Windows.Visibility]::Collapsed
-        $Script:ui_pnlExport.Visibility = [System.Windows.Visibility]::Visible
-        # Highlight active nav
-        $b = [System.Windows.Media.BrushConverter]::new()
-        $Script:ui_btnNavExport.Background = $b.ConvertFrom("#EAF2F8")
-        $Script:ui_txtNavExport.Foreground = $b.ConvertFrom("#1A5276")
-        $Script:ui_txtNavExport.FontWeight = [System.Windows.FontWeights]::SemiBold
-        $Script:ui_btnNavConnection.Background = [System.Windows.Media.Brushes]::Transparent
-        $Script:ui_txtNavConnection.Foreground = $b.ConvertFrom("#4A5568")
-        $Script:ui_txtNavConnection.FontWeight = [System.Windows.FontWeights]::Normal
-    })
+    $Script:ui_btnNavConnection.Add_Click({ Set-ActivePage -Page "Connection" })
+    $Script:ui_btnNavExport.Add_Click({ Set-ActivePage -Page "Export" })
+    $Script:ui_btnNavUsers.Add_Click({ Set-ActivePage -Page "Users" })
 }
 
 # =================== CONNECTION EVENTS ===================
@@ -801,6 +902,7 @@ function Register-ConnectionEvents {
         $Script:ui_btnDisconnect.IsEnabled = $false
         $Script:ui_lbDataBlocks.Items.Clear()
         $Script:ui_txtDBCount.Text = (T "LblDBCount") -f 0
+        Refresh-UmacList
 
         # La DLL reste chargee apres deconnexion (impossible a decharger) : le selecteur
         # reste donc verrouille sur la version courante.
@@ -961,6 +1063,118 @@ function Register-ExportEvents {
             Set-AppStateValue -Key "IsExporting" -Value $false
             $Script:ui_btnExportCsv.IsEnabled = $true
             $Script:ui_Window.Cursor = $null
+        }
+    })
+}
+
+# =================== USERS & ROLES EVENTS ===================
+
+function Write-UsersLog {
+    param([string]$Message)
+    if ([string]::IsNullOrEmpty($Message)) { return }
+    $Script:ui_txtUsersLog.AppendText($Message.TrimEnd() + "`r`n")
+    $Script:ui_txtUsersLog.ScrollToEnd()
+}
+
+function Refresh-UmacList {
+    $Script:ui_lbUsers.Items.Clear()
+    $items = @((Get-AppState).UmacItems)
+    foreach ($item in $items) {
+        $Script:ui_lbUsers.Items.Add((New-UmacListItem -Item $item)) | Out-Null
+    }
+    $Script:ui_txtUsersCount.Text = (T "LblUsersCount") -f $items.Length
+}
+
+function Invoke-UsersAction {
+    # Execute une action de la page utilisateurs : verifie la connexion, gere curseur
+    # d'attente, boutons et erreurs (message + journal).
+    param([scriptblock]$Action)
+
+    if (-not (Get-AppState).IsConnected) {
+        [System.Windows.MessageBox]::Show((T "MsgConnectFirst"), (T "MsgInfo"), "OK", "Information")
+        return
+    }
+    $buttons = @($Script:ui_btnLoadUsers, $Script:ui_btnExportUsers, $Script:ui_btnImportUsers, $Script:ui_btnDiagUsers)
+    try {
+        foreach ($b in $buttons) { $b.IsEnabled = $false }
+        $Script:ui_Window.Cursor = [System.Windows.Input.Cursors]::Wait
+        & $Action
+    } catch {
+        $msg = (Get-InnermostException $_.Exception).Message
+        Write-UsersLog "[ERREUR] $msg"
+        [System.Windows.MessageBox]::Show(((T "MsgUmacError") -f $msg), (T "MsgError"), "OK", "Error")
+    } finally {
+        foreach ($b in $buttons) { $b.IsEnabled = $true }
+        $Script:ui_Window.Cursor = $null
+    }
+}
+
+function Register-UsersEvents {
+    $Script:UmacLogger = { param($m) Write-UsersLog $m }
+
+    $Script:ui_btnLoadUsers.Add_Click({
+        Invoke-UsersAction {
+            Write-UsersLog "--- $(T 'BtnLoadUsers') ---"
+            Get-UmacItems | Out-Null
+            Refresh-UmacList
+        }
+    })
+
+    $Script:ui_btnExportUsers.Add_Click({
+        Invoke-UsersAction {
+            $dialog = New-Object System.Windows.Forms.SaveFileDialog
+            $dialog.Filter = "JSON (*.json)|*.json"
+            $dialog.FileName = "$((Get-AppState).ProjectName)_users-roles.json"
+            $folder = (Get-AppState).ExportFolder
+            if (-not $folder) { $folder = [Environment]::GetFolderPath('Desktop') }
+            $dialog.InitialDirectory = $folder
+            if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+            Write-UsersLog "--- $(T 'BtnExportUsers') ---"
+            $count = Export-UmacConfig -Path $dialog.FileName
+            Refresh-UmacList
+            [System.Windows.MessageBox]::Show(((T "MsgUmacExportDone") -f $count, $dialog.FileName),
+                (T "MsgInfo"), "OK", "Information")
+        }
+    })
+
+    $Script:ui_btnImportUsers.Add_Click({
+        Invoke-UsersAction {
+            $dialog = New-Object System.Windows.Forms.OpenFileDialog
+            $dialog.Filter = "JSON (*.json)|*.json"
+            if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+            $commit = -not [bool]$Script:ui_chkUsersDryRun.IsChecked
+            if ($commit) {
+                $answer = [System.Windows.MessageBox]::Show(
+                    ((T "MsgUmacConfirmImport") -f (Get-AppState).ProjectName),
+                    (T "MsgConfirm"), "YesNo", "Warning")
+                if ($answer -ne "Yes") { return }
+            }
+            $password = $null
+            if ($Script:ui_pwdUsersInitial.SecurePassword.Length -gt 0) {
+                $password = $Script:ui_pwdUsersInitial.SecurePassword
+            }
+
+            Write-UsersLog "--- $(T 'BtnImportUsers') ---"
+            $summary = Import-UmacConfig -Path $dialog.FileName -Commit $commit -InitialPassword $password
+            if ($commit) {
+                Get-UmacItems | Out-Null
+                Refresh-UmacList
+                $icon = if ($summary.Failed -gt 0 -or $summary.AssignFailed -gt 0) { "Warning" } else { "Information" }
+                [System.Windows.MessageBox]::Show(
+                    ((T "MsgUmacImportDone") -f $summary.Created, $summary.Existing, $summary.Failed, $summary.Assigned, $summary.AssignFailed),
+                    (T "MsgInfo"), "OK", $icon)
+            } else {
+                [System.Windows.MessageBox]::Show((T "MsgUmacDryRunDone"), (T "MsgInfo"), "OK", "Information")
+            }
+        }
+    })
+
+    $Script:ui_btnDiagUsers.Add_Click({
+        Invoke-UsersAction {
+            Write-UsersLog "--- $(T 'BtnDiagUsers') ---"
+            Write-UsersLog (Get-UmacDiagnostic)
         }
     })
 }

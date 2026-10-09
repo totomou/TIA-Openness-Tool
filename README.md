@@ -18,6 +18,7 @@ Multi-version TIA Portal DataBlock Exporter — Application PowerShell + WPF uti
 - **Expansion des Array** — Les types `Array[lo..hi] of Type` sont eclates en elements individuels avec offsets corrects
 - **Commentaires UDT** — Resolution automatique des commentaires depuis les definitions FB/UDT source
 - **Filtrage** — Affichage avec badges colores (Global / Instance), filtre par type
+- **Utilisateurs & roles** — Export / import JSON des utilisateurs, groupes et roles personnalises du projet (UMAC), avec leurs roles affectes et function rights (V18+)
 
 ## Prerequis
 
@@ -137,6 +138,29 @@ Prod.Moteur1.Actif;;Bool;Moteur actif;1;3;DB100;;;;;;;
 - **Trame** — `DB{numero}` pour chaque bloc
 - **Dossier de sortie** — `PcVue_{NomPLC}_{horodatage}/`
 
+### Utilisateurs & roles (UMAC)
+
+Page **Utilisateurs & roles**, une fois connecte :
+
+1. **Charger** — liste les utilisateurs, groupes, roles personnalises et roles systeme du projet
+   (Securite → Utilisateurs et roles), avec le nombre de roles / function rights affectes.
+2. **Exporter JSON...** — enregistre ces elements et leurs affectations (par nom) dans un fichier.
+3. **Importer JSON...** — dans un autre projet : cree les roles personnalises absents puis les
+   utilisateurs, et rejoue les affectations (function rights des roles, roles des utilisateurs).
+   La case **Simulation** (cochee par defaut) affiche dans le journal ce qui serait fait sans
+   rien ecrire. L'ecriture se fait dans une transaction TIA Portal.
+
+Points d'attention :
+
+- Ecriture possible a partir de **TIA Portal V18**. Le role UMAC de l'utilisateur connecte a TIA
+  doit porter la function right **Modify project via Openness API**.
+- Les mots de passe ne sont pas exportables : les utilisateurs locaux crees recoivent le
+  **mot de passe initial** saisi dans la page.
+- Les elements deja presents (meme nom) ne sont pas recrees ; seules les affectations manquantes
+  sont ajoutees. Les roles systeme et groupes ne sont pas crees, mais restent affectables.
+- L'API UMAC differe selon les versions : tout passe par reflexion. En cas d'echec, le bouton
+  **Diagnostic** affiche dans le journal le modele objet reel de l'installation.
+
 ### Expansion des Array
 
 Les types `Array[lo..hi] of BaseType` sont automatiquement eclates :
@@ -167,6 +191,7 @@ scripts/
     TiaConnection.ps1           # Scan, connexion, deconnexion TIA Portal
     TiaDataBlocks.ps1           # Enumeration recursive des DataBlocks
     TiaExportTable.ps1          # Export CSV + var_lst (Ewon) + PcVue Architect
+    TiaUsersRoles.ps1           # Export / import utilisateurs & roles (UMAC)
     UIHelpers.ps1               # Composants WPF reutilisables
     UI.ps1                      # XAML, initialisation fenetre, evenements
   data/
@@ -183,6 +208,7 @@ scripts/
 | **TiaConnection** | API Openness : scan process (avec nom projet), attach, enumeration PLC |
 | **TiaDataBlocks** | Parcours recursif des groupes de blocs + recherche par nom/numero |
 | **TiaExportTable** | Export CSV table + var_lst Ewon + PcVue Architect (parsing XML, offsets S7, expansion Array, commentaires UDT) |
+| **TiaUsersRoles** | Service UmacConfigurator (par reflexion) : lecture, export JSON, import sous transaction, diagnostic du modele objet |
 | **UIHelpers** | Badges colores, items de liste, bannieres de statut |
 | **UI** | XAML WPF, drapeaux langues, selecteur format, config Ewon, evenements |
 

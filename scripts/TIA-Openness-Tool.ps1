@@ -58,6 +58,7 @@ try {
             "TiaConnection.ps1"
             "TiaDataBlocks.ps1"
             "TiaExportTable.ps1"
+            "TiaUsersRoles.ps1"
             "UIHelpers.ps1"
             "UI.ps1"
         )

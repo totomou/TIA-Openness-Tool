@@ -158,6 +158,95 @@ function New-DataBlockListItem {
     return $border
 }
 
+function New-UmacListItem {
+    # Ligne de la liste utilisateurs & roles : badge de categorie | nom | composition source |
+    # resume des relations (roles affectes, function rights...).
+    param([hashtable]$Item)
+
+    $brush = [System.Windows.Media.BrushConverter]::new()
+    $styles = @{
+        User       = @{ Key = "KindUser";       Fg = "#3B82F6"; Bg = "#DBEAFE" }
+        Group      = @{ Key = "KindGroup";      Fg = "#F59E0B"; Bg = "#FEF3C7" }
+        CustomRole = @{ Key = "KindCustomRole"; Fg = "#27AE60"; Bg = "#E8F8E8" }
+        SystemRole = @{ Key = "KindSystemRole"; Fg = "#6B7280"; Bg = "#EDF2F7" }
+    }
+    $style = if ($styles.ContainsKey($Item.Kind)) { $styles[$Item.Kind] } else { $styles.SystemRole }
+
+    $border = New-Object System.Windows.Controls.Border
+    $border.Padding = [System.Windows.Thickness]::new(8, 6, 8, 6)
+    $border.Margin = [System.Windows.Thickness]::new(0, 1, 0, 1)
+    $border.Background = [System.Windows.Media.Brushes]::White
+    $border.BorderBrush = $brush.ConvertFrom("#E2E8F0")
+    $border.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+
+    $grid = New-Object System.Windows.Controls.Grid
+    # Columns: Badge(110) | Name(*) | Source(170) | Relations(2*)
+    foreach ($w in @(110, -1, 170, -2)) {
+        $col = New-Object System.Windows.Controls.ColumnDefinition
+        if ($w -lt 0) {
+            $col.Width = [System.Windows.GridLength]::new(-$w, [System.Windows.GridUnitType]::Star)
+        } else {
+            $col.Width = [System.Windows.GridLength]::new($w)
+        }
+        $grid.ColumnDefinitions.Add($col)
+    }
+
+    $badge = New-Object System.Windows.Controls.Border
+    $badge.Background = $brush.ConvertFrom($style.Bg)
+    $badge.CornerRadius = [System.Windows.CornerRadius]::new(3)
+    $badge.Padding = [System.Windows.Thickness]::new(6, 2, 6, 2)
+    $badge.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Left
+    $badge.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $txtBadge = New-Object System.Windows.Controls.TextBlock
+    $txtBadge.Text = T $style.Key
+    $txtBadge.FontSize = 10
+    $txtBadge.FontWeight = [System.Windows.FontWeights]::SemiBold
+    $txtBadge.Foreground = $brush.ConvertFrom($style.Fg)
+    $badge.Child = $txtBadge
+    [System.Windows.Controls.Grid]::SetColumn($badge, 0)
+    $grid.Children.Add($badge) | Out-Null
+
+    $txtName = New-Object System.Windows.Controls.TextBlock
+    $txtName.Text = $Item.Name
+    $txtName.FontSize = 12
+    $txtName.FontWeight = [System.Windows.FontWeights]::Medium
+    $txtName.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $txtName.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    [System.Windows.Controls.Grid]::SetColumn($txtName, 1)
+    $grid.Children.Add($txtName) | Out-Null
+
+    $txtSource = New-Object System.Windows.Controls.TextBlock
+    $txtSource.Text = $Item.Source
+    $txtSource.FontSize = 10
+    $txtSource.Foreground = $brush.ConvertFrom("#999")
+    $txtSource.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $txtSource.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    [System.Windows.Controls.Grid]::SetColumn($txtSource, 2)
+    $grid.Children.Add($txtSource) | Out-Null
+
+    # Resume des relations non vides ; le detail (noms) passe en infobulle.
+    $summary = @()
+    $detail = @()
+    foreach ($key in $Item.Relations.Keys) {
+        $names = @($Item.Relations[$key])
+        if ($names.Length -eq 0) { continue }
+        $summary += "${key}: $($names.Length)"
+        $detail += "${key}: $($names -join ', ')"
+    }
+    $txtRel = New-Object System.Windows.Controls.TextBlock
+    $txtRel.Text = $summary -join "  -  "
+    $txtRel.FontSize = 11
+    $txtRel.Foreground = $brush.ConvertFrom("#4A5568")
+    $txtRel.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+    $txtRel.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+    if ($detail.Length -gt 0) { $txtRel.ToolTip = $detail -join "`n" }
+    [System.Windows.Controls.Grid]::SetColumn($txtRel, 3)
+    $grid.Children.Add($txtRel) | Out-Null
+
+    $border.Child = $grid
+    return $border
+}
+
 function New-InstanceListItem {
     param([hashtable]$Instance)
 

@@ -463,4 +463,5 @@ function Disconnect-TiaInstance {
     Set-AppStateValue -Key "ProjectName" -Value ""
     Set-AppStateValue -Key "AllDataBlocks" -Value @()
     Set-AppStateValue -Key "FilteredDataBlocks" -Value @()
+    Set-AppStateValue -Key "UmacItems" -Value @()
 }
