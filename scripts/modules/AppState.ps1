@@ -40,6 +40,7 @@ $Script:AppState = @{
     # Users & roles (UMAC)
     UmacItems          = @()             # List of @{Source; Kind; Type; Name; Attributes; Relations}
     UmacImportPath     = $null           # JSON file opened (simulated), waiting for 'Write to TIA'
+    UmacDeviceMap      = @{}             # Device name in file -> device name in project ('' = ignore)
 
     # Runtime
     IsExporting        = $false

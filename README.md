@@ -149,9 +149,12 @@ Page **Utilisateurs & roles**, une fois connecte :
    serait fait (roles personnalises et utilisateurs a creer, affectations), **sans rien ecrire**.
 4. **Ecrire dans TIA** — actif une fois un fichier ouvert : apres confirmation, cree les droits
    runtime personnalises, les roles personnalises puis les utilisateurs absents, et rejoue les
-   affectations : **droits runtime des roles par appareil** (IHM, automate : l'appareil doit
-   porter le meme nom dans le projet cible), roles des utilisateurs, et reglages (commentaire,
-   alias, delai de session, actif). La case **Transaction** (cochee par defaut) fait tout ou rien ;
+   affectations : **droits runtime des roles par appareil** (IHM, automate), roles des
+   utilisateurs, et reglages (commentaire, alias, delai de session, actif).
+
+Si des appareils du fichier n'existent pas dans le projet (noms differents), **Ouvrir JSON...**
+affiche une fenetre de **correspondance des appareils** : pour chacun, choisir l'appareil du
+projet qui recoit ses droits runtime, ou l'ignorer. La case **Transaction** (cochee par defaut) fait tout ou rien ;
    decochee, chaque element est ecrit immediatement.
 
 Le bouton **Vider le journal** efface la zone de journal en bas de la page.

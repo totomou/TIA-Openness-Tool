@@ -1146,6 +1146,103 @@ function Update-UsersImportFile {
     $Script:ui_btnWriteUsers.IsEnabled = [bool]$path
 }
 
+function Show-UmacDeviceMapDialog {
+    # Correspondance des appareils : pour chaque appareil du fichier absent du projet, choix de
+    # l'appareil cible (ou l'ignorer). Retourne la table source -> cible ("" = ignorer), ou
+    # $null si l'utilisateur annule.
+    param([array]$Missing, [array]$Targets)
+
+    $dlg = [System.Windows.Window]::new()
+    $dlg.Title = T "DlgDeviceMapTitle"
+    $dlg.Width = 560
+    $dlg.SizeToContent = [System.Windows.SizeToContent]::Height
+    $dlg.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterOwner
+    try { $dlg.Owner = $Script:ui_Window } catch {}
+    $dlg.ResizeMode = [System.Windows.ResizeMode]::NoResize
+    try { $dlg.Icon = New-AppIcon } catch {}
+
+    $stack = [System.Windows.Controls.StackPanel]::new()
+    $stack.Margin = [System.Windows.Thickness]::new(16)
+
+    $info = [System.Windows.Controls.TextBlock]::new()
+    $info.Text = T "LblDeviceMapInfo"
+    $info.TextWrapping = [System.Windows.TextWrapping]::Wrap
+    $info.FontSize = 12
+    $info.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
+    $stack.Children.Add($info) | Out-Null
+
+    $ignore = T "OptDeviceIgnore"
+    $combos = @{}
+    foreach ($src in $Missing) {
+        $row = [System.Windows.Controls.Grid]::new()
+        $row.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+        foreach ($w in @(220, 30, -1)) {
+            $col = [System.Windows.Controls.ColumnDefinition]::new()
+            $col.Width = if ($w -lt 0) { [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) } else { [System.Windows.GridLength]::new($w) }
+            $row.ColumnDefinitions.Add($col)
+        }
+        $lbl = [System.Windows.Controls.TextBlock]::new()
+        $lbl.Text = $src
+        $lbl.FontWeight = [System.Windows.FontWeights]::SemiBold
+        $lbl.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+        $lbl.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+        [System.Windows.Controls.Grid]::SetColumn($lbl, 0)
+        $row.Children.Add($lbl) | Out-Null
+
+        $arrow = [System.Windows.Controls.TextBlock]::new()
+        $arrow.Text = "->"
+        $arrow.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+        $arrow.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+        [System.Windows.Controls.Grid]::SetColumn($arrow, 1)
+        $row.Children.Add($arrow) | Out-Null
+
+        $cb = [System.Windows.Controls.ComboBox]::new()
+        $cb.Height = 28
+        $cb.Items.Add($ignore) | Out-Null
+        foreach ($tg in $Targets) { $cb.Items.Add($tg) | Out-Null }
+        $cb.SelectedIndex = 0
+        [System.Windows.Controls.Grid]::SetColumn($cb, 2)
+        $row.Children.Add($cb) | Out-Null
+
+        $combos[$src] = $cb
+        $stack.Children.Add($row) | Out-Null
+    }
+
+    $btnPanel = [System.Windows.Controls.StackPanel]::new()
+    $btnPanel.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+    $btnPanel.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+    $btnPanel.Margin = [System.Windows.Thickness]::new(0, 10, 0, 0)
+
+    $state = @{ Ok = $false }
+    $btnOk = [System.Windows.Controls.Button]::new()
+    $btnOk.Content = "OK"
+    $btnOk.Width = 100
+    $btnOk.Height = 32
+    $btnOk.IsDefault = $true
+    $btnOk.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+    $btnOk.Add_Click({ $state.Ok = $true; $dlg.Close() }.GetNewClosure())
+    $btnPanel.Children.Add($btnOk) | Out-Null
+
+    $btnCancel = [System.Windows.Controls.Button]::new()
+    $btnCancel.Content = T "BtnCancel"
+    $btnCancel.Width = 100
+    $btnCancel.Height = 32
+    $btnCancel.IsCancel = $true
+    $btnPanel.Children.Add($btnCancel) | Out-Null
+
+    $stack.Children.Add($btnPanel) | Out-Null
+    $dlg.Content = $stack
+    $dlg.ShowDialog() | Out-Null
+
+    if (-not $state.Ok) { return $null }
+    $map = @{}
+    foreach ($src in $Missing) {
+        $sel = [string]$combos[$src].SelectedItem
+        $map[$src] = if ($sel -eq $ignore) { "" } else { $sel }
+    }
+    return $map
+}
+
 function Register-UsersEvents {
     $Script:UmacLogger = { param($m) Write-UsersLog $m }
 
@@ -1184,8 +1281,23 @@ function Register-UsersEvents {
             # Etape 1 : lecture du fichier + simulation. Rien n'est ecrit ; le fichier est
             # retenu pour le bouton "Ecrire dans TIA".
             Set-AppStateValue -Key "UmacImportPath" -Value $null
+
+            # Appareils du fichier absents de ce projet : correspondance choisie par l'utilisateur.
+            $map = @{}
+            $targets = @(Get-UmacDevices | ForEach-Object { $_.Key })
+            $missing = @(Get-UmacFileDevices -Path $dialog.FileName | Where-Object { $targets -notcontains $_ })
+            if ($missing.Length -gt 0 -and $targets.Length -gt 0) {
+                $map = Show-UmacDeviceMapDialog -Missing $missing -Targets $targets
+                if ($null -eq $map) { return }
+            }
+            Set-AppStateValue -Key "UmacDeviceMap" -Value $map
+
             Write-UsersLog "--- $(T 'BtnImportUsers') : $($dialog.FileName) ---"
-            Import-UmacConfig -Path $dialog.FileName -Commit $false -InitialPassword $null | Out-Null
+            foreach ($k in $map.Keys) {
+                $v = if ($map[$k]) { $map[$k] } else { T "OptDeviceIgnore" }
+                Write-UsersLog "  $k -> $v"
+            }
+            Import-UmacConfig -Path $dialog.FileName -Commit $false -InitialPassword $null -DeviceMap $map | Out-Null
             Set-AppStateValue -Key "UmacImportPath" -Value $dialog.FileName
             [System.Windows.MessageBox]::Show((T "MsgUmacDryRunDone"), (T "MsgInfo"), "OK", "Information")
         }
@@ -1206,8 +1318,10 @@ function Register-UsersEvents {
             }
 
             Write-UsersLog "--- $(T 'BtnWriteUsers') : $path ---"
+            $map = (Get-AppState).UmacDeviceMap
+            if ($null -eq $map) { $map = @{} }
             $summary = Import-UmacConfig -Path $path -Commit $true -InitialPassword $password `
-                -UseTransaction ([bool]$Script:ui_chkUsersTransaction.IsChecked)
+                -UseTransaction ([bool]$Script:ui_chkUsersTransaction.IsChecked) -DeviceMap $map
             Get-UmacItems | Out-Null
             Refresh-UmacList
             $icon = if ($summary.Failed -gt 0 -or $summary.AssignFailed -gt 0) { "Warning" } else { "Information" }
