@@ -352,6 +352,7 @@ $Script:MainXaml = @'
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="150"/>
         </Grid.RowDefinitions>
 
@@ -367,6 +368,7 @@ $Script:MainXaml = @'
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
@@ -376,13 +378,16 @@ $Script:MainXaml = @'
           <Button x:Name="btnExportUsers" Grid.Column="1" Content="Exporter JSON..."
                   Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
                   Background="#27AE60" Foreground="White" BorderThickness="0"/>
-          <Button x:Name="btnImportUsers" Grid.Column="2" Content="Importer JSON..."
+          <Button x:Name="btnImportUsers" Grid.Column="2" Content="Ouvrir JSON..."
                   Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
-                  Background="#1A5276" Foreground="White" BorderThickness="0"/>
-          <Button x:Name="btnDiagUsers" Grid.Column="3" Content="Diagnostic"
+                  Background="White" BorderBrush="#1A5276" BorderThickness="1"/>
+          <Button x:Name="btnWriteUsers" Grid.Column="3" Content="Ecrire dans TIA"
+                  Height="32" FontSize="12" Cursor="Hand" Padding="14,0" Margin="0,0,6,0"
+                  Background="#1A5276" Foreground="White" BorderThickness="0" IsEnabled="False"/>
+          <Button x:Name="btnDiagUsers" Grid.Column="4" Content="Diagnostic"
                   Height="32" FontSize="12" Cursor="Hand" Padding="14,0"
                   Background="White" BorderBrush="#CBD5E0" BorderThickness="1"/>
-          <Border Grid.Column="5" Background="#EDF2F7" Padding="12,4" CornerRadius="3"
+          <Border Grid.Column="6" Background="#EDF2F7" Padding="12,4" CornerRadius="3"
                   VerticalAlignment="Center">
             <TextBlock x:Name="txtUsersCount" Text="0" FontWeight="SemiBold"
                        Foreground="#4A5568" FontSize="12"/>
@@ -402,8 +407,9 @@ $Script:MainXaml = @'
         <Border Grid.Row="4" Background="#FFF7ED" BorderBrush="#FED7AA" BorderThickness="1"
                 CornerRadius="4" Padding="12" Margin="0,8,0,8">
           <StackPanel Orientation="Horizontal">
-            <CheckBox x:Name="chkUsersDryRun" Content="Simulation" IsChecked="True"
-                      VerticalAlignment="Center" FontSize="12" Margin="0,0,24,0"/>
+            <TextBlock x:Name="txtUsersImportFile" FontSize="12" FontWeight="SemiBold"
+                       Foreground="#92400E" VerticalAlignment="Center" Margin="0,0,24,0"
+                       MaxWidth="320" TextTrimming="CharacterEllipsis"/>
             <CheckBox x:Name="chkUsersTransaction" Content="Transaction" IsChecked="True"
                       VerticalAlignment="Center" FontSize="12" Margin="0,0,24,0"/>
             <TextBlock x:Name="txtUsersPasswordLabel" Text="Mot de passe initial :" FontSize="12"
@@ -414,7 +420,14 @@ $Script:MainXaml = @'
         </Border>
 
         <!-- Log -->
-        <TextBox Grid.Row="5" x:Name="txtUsersLog" IsReadOnly="True" TextWrapping="NoWrap"
+        <DockPanel Grid.Row="5" Margin="0,0,0,4">
+          <Button x:Name="btnClearUsersLog" DockPanel.Dock="Right" Content="Vider le journal"
+                  Height="24" FontSize="11" Cursor="Hand" Padding="10,0"
+                  Background="White" BorderBrush="#CBD5E0" BorderThickness="1"/>
+          <TextBlock x:Name="txtUsersLogLabel" Text="Journal" FontSize="12" FontWeight="SemiBold"
+                     Foreground="#4A5568" VerticalAlignment="Center"/>
+        </DockPanel>
+        <TextBox Grid.Row="6" x:Name="txtUsersLog" IsReadOnly="True" TextWrapping="NoWrap"
                  FontFamily="Consolas" FontSize="11" Background="White"
                  BorderBrush="#E2E8F0" VerticalScrollBarVisibility="Auto"
                  HorizontalScrollBarVisibility="Auto"/>
@@ -525,7 +538,8 @@ function Initialize-MainWindow {
         "btnNavUsers", "txtNavUsers",
         "pnlUsers", "txtUsersTitle", "txtUsersInfo",
         "btnLoadUsers", "btnExportUsers", "btnImportUsers", "btnDiagUsers", "txtUsersCount",
-        "lbUsers", "chkUsersDryRun", "chkUsersTransaction", "txtUsersPasswordLabel", "pwdUsersInitial", "txtUsersLog"
+        "btnWriteUsers", "txtUsersImportFile", "btnClearUsersLog", "txtUsersLogLabel",
+        "lbUsers", "chkUsersTransaction", "txtUsersPasswordLabel", "pwdUsersInitial", "txtUsersLog"
     )
     foreach ($name in $elementNames) {
         $el = $Script:ui_Window.FindName($name)
@@ -751,7 +765,11 @@ function Update-AllTexts {
     $Script:ui_btnExportUsers.Content = T "BtnExportUsers"
     $Script:ui_btnImportUsers.Content = T "BtnImportUsers"
     $Script:ui_btnDiagUsers.Content = T "BtnDiagUsers"
-    $Script:ui_chkUsersDryRun.Content = T "LblUsersDryRun"
+    $Script:ui_btnWriteUsers.Content = T "BtnWriteUsers"
+    $Script:ui_btnWriteUsers.ToolTip = T "TipWriteUsers"
+    $Script:ui_btnClearUsersLog.Content = T "BtnClearLog"
+    $Script:ui_txtUsersLogLabel.Text = T "LblUsersLog"
+    Update-UsersImportFile
     $Script:ui_chkUsersTransaction.Content = T "LblUsersTransaction"
     $Script:ui_chkUsersTransaction.ToolTip = T "TipUsersTransaction"
     $Script:ui_txtUsersPasswordLabel.Text = T "LblUsersPassword"
@@ -1098,7 +1116,8 @@ function Invoke-UsersAction {
         [System.Windows.MessageBox]::Show((T "MsgConnectFirst"), (T "MsgInfo"), "OK", "Information")
         return
     }
-    $buttons = @($Script:ui_btnLoadUsers, $Script:ui_btnExportUsers, $Script:ui_btnImportUsers, $Script:ui_btnDiagUsers)
+    $buttons = @($Script:ui_btnLoadUsers, $Script:ui_btnExportUsers, $Script:ui_btnImportUsers,
+                 $Script:ui_btnWriteUsers, $Script:ui_btnDiagUsers)
     try {
         foreach ($b in $buttons) { $b.IsEnabled = $false }
         $Script:ui_Window.Cursor = [System.Windows.Input.Cursors]::Wait
@@ -1110,7 +1129,21 @@ function Invoke-UsersAction {
     } finally {
         foreach ($b in $buttons) { $b.IsEnabled = $true }
         $Script:ui_Window.Cursor = $null
+        Update-UsersImportFile
     }
+}
+
+function Update-UsersImportFile {
+    # Fichier JSON ouvert (en attente d'ecriture) : libelle + activation de "Ecrire dans TIA".
+    $path = (Get-AppState).UmacImportPath
+    if ($path) {
+        $Script:ui_txtUsersImportFile.Text = (T "LblUsersFile") -f [System.IO.Path]::GetFileName($path)
+        $Script:ui_txtUsersImportFile.ToolTip = $path
+    } else {
+        $Script:ui_txtUsersImportFile.Text = T "LblUsersNoFile"
+        $Script:ui_txtUsersImportFile.ToolTip = $null
+    }
+    $Script:ui_btnWriteUsers.IsEnabled = [bool]$path
 }
 
 function Register-UsersEvents {
@@ -1148,33 +1181,43 @@ function Register-UsersEvents {
             $dialog.Filter = "JSON (*.json)|*.json"
             if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
 
-            $commit = -not [bool]$Script:ui_chkUsersDryRun.IsChecked
-            if ($commit) {
-                $answer = [System.Windows.MessageBox]::Show(
-                    ((T "MsgUmacConfirmImport") -f (Get-AppState).ProjectName),
-                    (T "MsgConfirm"), "YesNo", "Warning")
-                if ($answer -ne "Yes") { return }
-            }
+            # Etape 1 : lecture du fichier + simulation. Rien n'est ecrit ; le fichier est
+            # retenu pour le bouton "Ecrire dans TIA".
+            Set-AppStateValue -Key "UmacImportPath" -Value $null
+            Write-UsersLog "--- $(T 'BtnImportUsers') : $($dialog.FileName) ---"
+            Import-UmacConfig -Path $dialog.FileName -Commit $false -InitialPassword $null | Out-Null
+            Set-AppStateValue -Key "UmacImportPath" -Value $dialog.FileName
+            [System.Windows.MessageBox]::Show((T "MsgUmacDryRunDone"), (T "MsgInfo"), "OK", "Information")
+        }
+    })
+
+    $Script:ui_btnWriteUsers.Add_Click({
+        Invoke-UsersAction {
+            # Etape 2 : ecriture effective du fichier ouvert, apres confirmation.
+            $path = (Get-AppState).UmacImportPath
+            if (-not $path) { return }
+            $answer = [System.Windows.MessageBox]::Show(
+                ((T "MsgUmacConfirmImport") -f [System.IO.Path]::GetFileName($path), (Get-AppState).ProjectName),
+                (T "MsgConfirm"), "YesNo", "Warning")
+            if ($answer -ne "Yes") { return }
             $password = $null
             if ($Script:ui_pwdUsersInitial.SecurePassword.Length -gt 0) {
                 $password = $Script:ui_pwdUsersInitial.SecurePassword
             }
 
-            Write-UsersLog "--- $(T 'BtnImportUsers') ---"
-            $summary = Import-UmacConfig -Path $dialog.FileName -Commit $commit -InitialPassword $password `
+            Write-UsersLog "--- $(T 'BtnWriteUsers') : $path ---"
+            $summary = Import-UmacConfig -Path $path -Commit $true -InitialPassword $password `
                 -UseTransaction ([bool]$Script:ui_chkUsersTransaction.IsChecked)
-            if ($commit) {
-                Get-UmacItems | Out-Null
-                Refresh-UmacList
-                $icon = if ($summary.Failed -gt 0 -or $summary.AssignFailed -gt 0) { "Warning" } else { "Information" }
-                [System.Windows.MessageBox]::Show(
-                    ((T "MsgUmacImportDone") -f $summary.Created, $summary.Existing, $summary.Failed, $summary.Assigned, $summary.AssignFailed),
-                    (T "MsgInfo"), "OK", $icon)
-            } else {
-                [System.Windows.MessageBox]::Show((T "MsgUmacDryRunDone"), (T "MsgInfo"), "OK", "Information")
-            }
+            Get-UmacItems | Out-Null
+            Refresh-UmacList
+            $icon = if ($summary.Failed -gt 0 -or $summary.AssignFailed -gt 0) { "Warning" } else { "Information" }
+            [System.Windows.MessageBox]::Show(
+                ((T "MsgUmacImportDone") -f $summary.Created, $summary.Existing, $summary.Failed, $summary.Assigned, $summary.AssignFailed),
+                (T "MsgInfo"), "OK", $icon)
         }
     })
+
+    $Script:ui_btnClearUsersLog.Add_Click({ $Script:ui_txtUsersLog.Clear() })
 
     $Script:ui_btnDiagUsers.Add_Click({
         Invoke-UsersAction {
