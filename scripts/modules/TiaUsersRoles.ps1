@@ -13,6 +13,9 @@
 $Script:UmacTypeName = "Siemens.Engineering.Umac.UmacConfigurator"
 $Script:UmacMaxRelationItems = 2000
 $Script:UmacFileFormat = "TiaOpennessTool.UsersRoles"
+# Utilisateurs predefinis presents dans tout projet : jamais crees.
+$Script:UmacBuiltinUsers = @("Anonymous")
+$Script:UmacReloadLogged = $false
 
 # Recepteur du journal, positionne par l'interface (scriptblock prenant un message).
 $Script:UmacLogger = $null
@@ -20,6 +23,38 @@ $Script:UmacLogger = $null
 function Write-UmacLog {
     param([string]$Message)
     if ($Script:UmacLogger) { & $Script:UmacLogger $Message }
+}
+
+function Format-UmacException {
+    # Message complet d'une exception Openness : chaine des InnerException et details Siemens
+    # (EngineeringException expose la vraie cause dans DetailMessageData, le Message de
+    # premier niveau restant generique : "Error when calling method 'Create'...").
+    param([Exception]$Exception)
+    $parts = @()
+    $ex = $Exception
+    while ($ex) {
+        # Enveloppes de reflexion / PowerShell sans information utile.
+        $wrapper = ($ex -is [System.Reflection.TargetInvocationException]) -or
+                   ($ex -is [System.Management.Automation.MethodInvocationException])
+        if (-not $wrapper) { $parts += $ex.Message }
+        foreach ($p in $ex.GetType().GetProperties()) {
+            if ($p.Name -notmatch 'Detail|MessageData') { continue }
+            $v = $null
+            try { $v = $p.GetValue($ex, $null) } catch {}
+            if ($null -eq $v) { continue }
+            if ((Test-UmacEnumerable $v)) {
+                foreach ($d in $v) {
+                    $txt = [string]$d
+                    try { if ($d.Text) { $txt = [string]$d.Text } } catch {}
+                    if ($txt) { $parts += $txt }
+                }
+            } else {
+                $parts += [string]$v
+            }
+        }
+        $ex = $ex.InnerException
+    }
+    return (@($parts | Where-Object { $_ } | Select-Object -Unique) -join " | ")
 }
 
 function Get-InnermostException {
@@ -57,11 +92,35 @@ function Get-UmacConfiguratorType {
     return $type
 }
 
+function Get-ActiveProject {
+    # TIA Portal peut remplacer l'objet Project (ecriture dans la gestion des utilisateurs) :
+    # l'ancien leve alors "Access to a disposed object". On reprend le projet ouvert aupres de
+    # l'instance TIA et on met l'etat a jour.
+    $state = Get-AppState
+    $project = $state.CurrentProject
+    if (-not $project) { throw (T "MsgConnectFirst") }
+    try {
+        # Par reflexion : PowerShell avale les exceptions des accesseurs de propriete, un
+        # simple $project.Name ne detecterait pas l'objet invalide.
+        $nameProp = $project.GetType().GetProperty("Name")
+        if ($nameProp) { [void]$nameProp.GetValue($project, $null) }
+        return $project
+    } catch {
+        # Une seule mention par import : TIA remplace le projet apres chaque ecriture.
+        if (-not $Script:UmacReloadLogged) { Write-UmacLog (T "LogUmacProjectReloaded") }
+        $Script:UmacReloadLogged = $true
+    }
+    $projects = $state.TiaPortal.Projects
+    if ($projects.Count -eq 0) { throw (T "MsgNoProject") }
+    $project = $projects[0]
+    Set-AppStateValue -Key "CurrentProject" -Value $project
+    return $project
+}
+
 function Get-UmacConfigurator {
     # Appelle Project.GetService<UmacConfigurator>() par reflexion (PowerShell 5.1 ne sait pas
     # appeler directement une methode generique sans parametre).
-    $project = (Get-AppState).CurrentProject
-    if (-not $project) { throw (T "MsgConnectFirst") }
+    $project = Get-ActiveProject
 
     $type = Get-UmacConfiguratorType
     if (-not $type) { throw (T "MsgUmacUnavailable") }
@@ -334,7 +393,7 @@ function Invoke-UmacCreate {
         }
 
         try { return ,$m.Invoke($Composition, $callArgs) }
-        catch { throw (Get-InnermostException $_.Exception) }
+        catch { throw (Format-UmacException $_.Exception) }
     }
     throw ((T "MsgUmacNoCreate") -f $Composition.GetType().Name)
 }
@@ -360,8 +419,9 @@ function Add-UmacRelationMember {
         $callArgs = New-Object object[] 1
         $callArgs[0] = $arg.PSObject.BaseObject
         try { [void]$m.Invoke($Collection, $callArgs); return }
-        catch { throw (Get-InnermostException $_.Exception) }
+        catch { throw (Format-UmacException $_.Exception) }
     }
+    if (@($Candidates | Where-Object { $null -ne $_ }).Length -eq 0) { throw (T "MsgUmacNotFound") }
     throw ((T "MsgUmacNoAssign") -f $Collection.GetType().Name)
 }
 
@@ -492,14 +552,18 @@ function Import-UmacConfig {
     $summary = @{ Created = 0; Existing = 0; Failed = 0; Assigned = 0; AssignFailed = 0 }
     $planned = @()
 
+    $Script:UmacReloadLogged = $false
     $ea = $null
     $tr = $null
-    if ($Commit) {
-        $state = Get-AppState
-        $ea = $state.TiaPortal.ExclusiveAccess((T "UmacExclusiveAccess"))
-        $tr = $ea.Transaction($state.CurrentProject, "Import users & roles")
-    }
+    # Etape en cours, reportee dans l'erreur pour localiser un echec cote TIA Portal.
+    $step = "ExclusiveAccess"
     try {
+        if ($Commit) {
+            $ea = (Get-AppState).TiaPortal.ExclusiveAccess((T "UmacExclusiveAccess"))
+            $step = "Transaction"
+            $tr = $ea.Transaction((Get-ActiveProject), "Import users & roles")
+        }
+        $step = "lecture initiale"
         $ctx = Get-UmacImportContext -Kind 'CustomRole' -Prefer 'Custom' -Planned $planned
         $userCtx = Get-UmacImportContext -Kind 'User' -Prefer 'Project' -Planned $planned
         Write-UmacLog ((T "LogUmacTargets") -f
@@ -512,6 +576,11 @@ function Import-UmacConfig {
             foreach ($item in $group.Items) {
                 $name = [string]$item.name
                 if (-not $name) { continue }
+                if ($Script:UmacBuiltinUsers -contains $name) {
+                    Write-UmacLog ((T "LogUmacBuiltinSkipped") -f $name)
+                    continue
+                }
+                $step = "$($item.kind) '$name' : lecture"
 
                 # Compositions relues a chaque element : TIA Portal invalide les objets
                 # Openness obtenus avant une ecriture ("Access to a disposed object").
@@ -533,6 +602,7 @@ function Import-UmacConfig {
                     $planned += $name
                     Write-UmacLog ((T "LogUmacWouldCreate") -f $item.kind, $name)
                 } else {
+                    $step = "$($item.kind) '$name' : creation"
                     try {
                         $target = Invoke-UmacCreate -Composition $ctx.Comp -Name $name -Password $InitialPassword
                         $summary.Created++
@@ -544,6 +614,7 @@ function Import-UmacConfig {
                     }
                 }
 
+                $step = "$($item.kind) '$name' : affectations"
                 if ($Commit) {
                     # La creation a pu invalider les objets lus avant : relire cible et index.
                     $fresh = Get-UmacImportContext -Kind $group.Kind -Prefer $group.Prefer -Planned @()
@@ -556,10 +627,16 @@ function Import-UmacConfig {
             }
         }
 
+        $step = "validation de la transaction"
         if ($Commit) { $tr.CommitOnDispose() }
+    } catch {
+        $msg = (Get-InnermostException $_.Exception).Message
+        if ($msg -match 'disposed') { $msg += "`n`n" + (T "MsgUmacSessionLost") }
+        throw ((T "MsgUmacStepError") -f $step, $msg)
     } finally {
-        if ($tr) { $tr.Dispose() }
-        if ($ea) { $ea.Dispose() }
+        # Une erreur a la fermeture ne doit pas masquer la cause : elle est seulement journalisee.
+        if ($tr) { try { $tr.Dispose() } catch { Write-UmacLog "  [!] Transaction.Dispose : $((Get-InnermostException $_.Exception).Message)" } }
+        if ($ea) { try { $ea.Dispose() } catch { Write-UmacLog "  [!] ExclusiveAccess.Dispose : $((Get-InnermostException $_.Exception).Message)" } }
     }
 
     Write-UmacLog ((T "LogUmacImportDone") -f $summary.Created, $summary.Existing, $summary.Failed, $summary.Assigned, $summary.AssignFailed)
