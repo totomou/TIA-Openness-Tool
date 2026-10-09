@@ -319,15 +319,55 @@ function Get-UmacDiagnostic {
             [void]$sb.AppendLine("    " + (Format-UmacSignature $m))
         }
 
-        $first = $null
+        # Type des elements : d'apres IEnumerable<T> (connu meme si la composition est vide),
+        # a defaut d'apres le premier element.
+        $itemType = $value.GetType().GetInterfaces() |
+            Where-Object { $_.IsGenericType -and $_.GetGenericTypeDefinition() -eq [System.Collections.Generic.IEnumerable`1] } |
+            ForEach-Object { $_.GetGenericArguments()[0] } | Select-Object -First 1
         if (Test-UmacEnumerable $value) {
             $n = 0
-            foreach ($x in $value) { if ($null -eq $first) { $first = $x }; $n++ }
+            foreach ($x in $value) { if ($null -eq $itemType) { $itemType = $x.GetType() }; $n++ }
             [void]$sb.AppendLine("    elements : $n")
         }
-        if ($null -ne $first) {
-            [void]$sb.AppendLine("    element : $($first.GetType().FullName)")
-            Add-UmacTypeMembers -Sb $sb -Type $first.GetType() -Indent "      "
+        if ($null -ne $itemType) {
+            [void]$sb.AppendLine("    element : $($itemType.FullName)")
+            Add-UmacTypeMembers -Sb $sb -Type $itemType -Indent "      "
+        }
+    }
+
+    # Tous les types publics de l'espace Umac (UmacDevice, associations de droits...).
+    $umacTypes = @()
+    foreach ($asm in [AppDomain]::CurrentDomain.GetAssemblies()) {
+        if ($asm.GetName().Name -notlike "Siemens.Engineering*") { continue }
+        try { $umacTypes += @($asm.GetExportedTypes() | Where-Object { $_.Namespace -eq "Siemens.Engineering.Umac" }) } catch {}
+    }
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("===== Types Siemens.Engineering.Umac =====")
+    foreach ($t in ($umacTypes | Sort-Object FullName -Unique)) {
+        if ($t.IsEnum) {
+            [void]$sb.AppendLine("$($t.Name) (enum) : $([Enum]::GetNames($t) -join ', ')")
+            continue
+        }
+        [void]$sb.AppendLine($t.Name)
+        Add-UmacTypeMembers -Sb $sb -Type $t -Indent "  "
+    }
+
+    # Ou obtenir un UmacDevice (droits runtime par appareil) : membres qui en renvoient un.
+    $deviceType = $umacTypes | Where-Object { $_.Name -eq "UmacDevice" } | Select-Object -First 1
+    if ($deviceType) {
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("===== Membres renvoyant un UmacDevice =====")
+        foreach ($asm in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            if ($asm.GetName().Name -notlike "Siemens.Engineering*") { continue }
+            $types = @()
+            try { $types = @($asm.GetExportedTypes()) } catch { continue }
+            foreach ($t in $types) {
+                foreach ($m in $t.GetMethods()) {
+                    if ($m.ReturnType -eq $deviceType -or ($m.ReturnType.IsGenericType -and $m.ReturnType.GetGenericArguments() -contains $deviceType)) {
+                        [void]$sb.AppendLine("  $($t.FullName).$(Format-UmacSignature $m)")
+                    }
+                }
+            }
         }
     }
     return $sb.ToString()
@@ -383,8 +423,10 @@ function New-UmacLookup {
 
 function Invoke-UmacCreate {
     # Appelle la surcharge Create(string, ...) la plus courte de la composition. Un parametre
-    # SecureString (mot de passe d'un utilisateur local) recoit le mot de passe initial.
-    param($Composition, [string]$Name, [System.Security.SecureString]$Password)
+    # SecureString (mot de passe d'un utilisateur local) recoit le mot de passe initial ; un
+    # parametre texte (ex. Create(name, comment) des roles en V21) recoit l'attribut exporte
+    # de meme nom, sinon une chaine vide : TIA Portal plante (NonRecoverableException) sur null.
+    param($Composition, [string]$Name, [System.Security.SecureString]$Password, $Attributes)
 
     $methods = @($Composition.GetType().GetMethods() |
         Where-Object { $_.Name -eq 'Create' } |
@@ -401,6 +443,13 @@ function Invoke-UmacCreate {
             if ($pt -eq [System.Security.SecureString]) {
                 if (-not $Password) { throw (T "MsgUmacPasswordRequired") }
                 $callArgs[$i] = $Password.Copy()
+            } elseif ($pt -eq [string]) {
+                $value = ""
+                if ($null -ne $Attributes) {
+                    $attr = $Attributes.PSObject.Properties | Where-Object { $_.Name -eq $ps[$i].Name } | Select-Object -First 1
+                    if ($attr -and $null -ne $attr.Value) { $value = [string]$attr.Value }
+                }
+                $callArgs[$i] = $value
             } elseif ($ps[$i].HasDefaultValue) {
                 $callArgs[$i] = $ps[$i].DefaultValue
             } elseif ($pt.IsValueType) {
@@ -628,7 +677,8 @@ function Import-UmacConfig {
                 } else {
                     $step = "$($item.kind) '$name' : creation"
                     try {
-                        $target = Invoke-UmacCreate -Composition $ctx.Comp -Name $name -Password $InitialPassword
+                        $target = Invoke-UmacCreate -Composition $ctx.Comp -Name $name -Password $InitialPassword `
+                            -Attributes $(if ($item.PSObject.Properties['attributes']) { $item.attributes } else { $null })
                         $summary.Created++
                         Write-UmacLog ((T "LogUmacCreated") -f $item.kind, $name)
                     } catch {
