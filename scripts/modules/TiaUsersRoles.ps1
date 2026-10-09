@@ -535,8 +535,8 @@ function Set-UmacDeviceRights {
         $wanted = @($entry.Value | Where-Object { $_ })
         $dev = $devices | Where-Object { $_.Key -eq $entry.Name } | Select-Object -First 1
         if (-not $dev) {
+            # Appareil absent du projet cible : droits ignores (signales), pas un echec.
             Write-UmacLog ((T "LogUmacDeviceMissing") -f $RoleName, $entry.Name, $wanted.Length)
-            $stats.Failed += $wanted.Length
             continue
         }
 
