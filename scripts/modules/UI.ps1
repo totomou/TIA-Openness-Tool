@@ -404,6 +404,8 @@ $Script:MainXaml = @'
           <StackPanel Orientation="Horizontal">
             <CheckBox x:Name="chkUsersDryRun" Content="Simulation" IsChecked="True"
                       VerticalAlignment="Center" FontSize="12" Margin="0,0,24,0"/>
+            <CheckBox x:Name="chkUsersTransaction" Content="Transaction" IsChecked="True"
+                      VerticalAlignment="Center" FontSize="12" Margin="0,0,24,0"/>
             <TextBlock x:Name="txtUsersPasswordLabel" Text="Mot de passe initial :" FontSize="12"
                        VerticalAlignment="Center" Margin="0,0,8,0"/>
             <PasswordBox x:Name="pwdUsersInitial" Width="180" Height="28" FontSize="12"
@@ -523,7 +525,7 @@ function Initialize-MainWindow {
         "btnNavUsers", "txtNavUsers",
         "pnlUsers", "txtUsersTitle", "txtUsersInfo",
         "btnLoadUsers", "btnExportUsers", "btnImportUsers", "btnDiagUsers", "txtUsersCount",
-        "lbUsers", "chkUsersDryRun", "txtUsersPasswordLabel", "pwdUsersInitial", "txtUsersLog"
+        "lbUsers", "chkUsersDryRun", "chkUsersTransaction", "txtUsersPasswordLabel", "pwdUsersInitial", "txtUsersLog"
     )
     foreach ($name in $elementNames) {
         $el = $Script:ui_Window.FindName($name)
@@ -750,6 +752,8 @@ function Update-AllTexts {
     $Script:ui_btnImportUsers.Content = T "BtnImportUsers"
     $Script:ui_btnDiagUsers.Content = T "BtnDiagUsers"
     $Script:ui_chkUsersDryRun.Content = T "LblUsersDryRun"
+    $Script:ui_chkUsersTransaction.Content = T "LblUsersTransaction"
+    $Script:ui_chkUsersTransaction.ToolTip = T "TipUsersTransaction"
     $Script:ui_txtUsersPasswordLabel.Text = T "LblUsersPassword"
     $Script:ui_btnLoadUsers.ToolTip = T "TipLoadUsers"
     $Script:ui_btnExportUsers.ToolTip = T "TipExportUsers"
@@ -1157,7 +1161,8 @@ function Register-UsersEvents {
             }
 
             Write-UsersLog "--- $(T 'BtnImportUsers') ---"
-            $summary = Import-UmacConfig -Path $dialog.FileName -Commit $commit -InitialPassword $password
+            $summary = Import-UmacConfig -Path $dialog.FileName -Commit $commit -InitialPassword $password `
+                -UseTransaction ([bool]$Script:ui_chkUsersTransaction.IsChecked)
             if ($commit) {
                 Get-UmacItems | Out-Null
                 Refresh-UmacList

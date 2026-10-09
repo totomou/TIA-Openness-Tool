@@ -189,9 +189,12 @@ $Script:Strings = @{
         LogUmacRelSkipSystem = "      {0} / {1} : role(s) systeme non affecte(s) : {2}"
         LogUmacProjectReloaded = "  [i] Objet projet invalide par TIA Portal : reprise du projet ouvert"
         MsgUmacStepError  = "Echec a l'etape << {0} >> :`n{1}"
-        MsgUmacSessionLost = "TIA Portal a ferme la session Openness, en general juste apres l'erreur precedente du journal (rien n'est ecrit : la transaction est annulee). Verifiez que TIA Portal est toujours ouvert, puis reconnectez-vous : Connexion -> Scanner -> Se connecter."
+        MsgUmacSessionLost = "TIA Portal a ferme la session Openness, en general juste apres l'erreur precedente du journal (avec transaction, rien n'est ecrit). Verifiez que TIA Portal est toujours ouvert, puis reconnectez-vous : Connexion -> Scanner -> Se connecter."
         LogUmacBuiltinSkipped = "  = User '{0}' : utilisateur predefini, ignore"
         MsgUmacNotFound   = "introuvable dans ce projet"
+        LblUsersTransaction = "Transaction (tout ou rien)"
+        TipUsersTransaction = "Coche : en cas d'erreur fatale, rien n'est ecrit. Decoche : chaque element est ecrit immediatement (a essayer si TIA Portal refuse la creation dans une transaction)."
+        LogUmacNoTransaction = "  [i] Ecriture sans transaction : chaque element est ecrit immediatement"
         LogUmacImportDone = "[OK] Crees : {0}, deja presents : {1}, echecs : {2}, affectations : {3} (echecs : {4})"
 
         # --- Language ---
@@ -384,9 +387,12 @@ $Script:Strings = @{
         LogUmacRelSkipSystem = "      {0} / {1}: system role(s) not assigned: {2}"
         LogUmacProjectReloaded = "  [i] Project object invalidated by TIA Portal: picking up the open project again"
         MsgUmacStepError  = "Failed at step << {0} >>:`n{1}"
-        MsgUmacSessionLost = "TIA Portal closed the Openness session, usually right after the previous error in the log (nothing is written: the transaction is rolled back). Check that TIA Portal is still open, then reconnect: Connection -> Scan -> Connect."
+        MsgUmacSessionLost = "TIA Portal closed the Openness session, usually right after the previous error in the log (with a transaction, nothing is written). Check that TIA Portal is still open, then reconnect: Connection -> Scan -> Connect."
         LogUmacBuiltinSkipped = "  = User '{0}': built-in user, skipped"
         MsgUmacNotFound   = "not found in this project"
+        LblUsersTransaction = "Transaction (all or nothing)"
+        TipUsersTransaction = "Checked: on a fatal error nothing is written. Unchecked: each item is written immediately (try it if TIA Portal refuses creation inside a transaction)."
+        LogUmacNoTransaction = "  [i] Writing without a transaction: each item is written immediately"
         LogUmacImportDone = "[OK] Created: {0}, already present: {1}, failed: {2}, assignments: {3} (failed: {4})"
 
         # --- Language ---

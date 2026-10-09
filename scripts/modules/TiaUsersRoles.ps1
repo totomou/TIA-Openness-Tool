@@ -25,36 +25,51 @@ function Write-UmacLog {
     if ($Script:UmacLogger) { & $Script:UmacLogger $Message }
 }
 
+function Format-UmacValue {
+    # Valeur lisible d'une propriete d'exception (collections : elements, avec Text si present).
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
+    if (Test-UmacEnumerable $Value) {
+        $texts = @()
+        foreach ($d in $Value) {
+            $txt = [string]$d
+            $textProp = $d.GetType().GetProperty("Text")
+            if ($textProp) { try { $txt = [string]$textProp.GetValue($d, $null) } catch {} }
+            if ($txt) { $texts += $txt }
+        }
+        if ($texts.Length -eq 0) { return $null }
+        return "[" + ($texts -join " ; ") + "]"
+    }
+    return [string]$Value
+}
+
 function Format-UmacException {
-    # Message complet d'une exception Openness : chaine des InnerException et details Siemens
-    # (EngineeringException expose la vraie cause dans DetailMessageData, le Message de
-    # premier niveau restant generique : "Error when calling method 'Create'...").
+    # Message complet d'une exception Openness : pour chaque exception de la chaine (hors
+    # enveloppes de reflexion), son type, son message et ses proprietes specifiques. Le
+    # message de premier niveau est generique ("Error when calling method 'Create'...") ;
+    # la cause eventuelle est dans les proprietes des exceptions Siemens.
     param([Exception]$Exception)
+    $standard = @('Message', 'InnerException', 'StackTrace', 'TargetSite', 'Source', 'HelpLink',
+                  'HResult', 'Data', 'ErrorRecord', 'WasThrownFromThrowStatement')
     $parts = @()
     $ex = $Exception
     while ($ex) {
-        # Enveloppes de reflexion / PowerShell sans information utile.
         $wrapper = ($ex -is [System.Reflection.TargetInvocationException]) -or
                    ($ex -is [System.Management.Automation.MethodInvocationException])
-        if (-not $wrapper) { $parts += $ex.Message }
-        foreach ($p in $ex.GetType().GetProperties()) {
-            if ($p.Name -notmatch 'Detail|MessageData') { continue }
-            $v = $null
-            try { $v = $p.GetValue($ex, $null) } catch {}
-            if ($null -eq $v) { continue }
-            if ((Test-UmacEnumerable $v)) {
-                foreach ($d in $v) {
-                    $txt = [string]$d
-                    try { if ($d.Text) { $txt = [string]$d.Text } } catch {}
-                    if ($txt) { $parts += $txt }
-                }
-            } else {
-                $parts += [string]$v
+        if (-not $wrapper) {
+            $line = "$($ex.GetType().FullName): $($ex.Message)"
+            foreach ($p in $ex.GetType().GetProperties()) {
+                if ($standard -contains $p.Name -or $p.GetIndexParameters().Length -gt 0) { continue }
+                $v = $null
+                try { $v = Format-UmacValue ($p.GetValue($ex, $null)) } catch {}
+                if ($v) { $line += " {$($p.Name)=$v}" }
             }
+            $parts += $line
         }
         $ex = $ex.InnerException
     }
-    return (@($parts | Where-Object { $_ } | Select-Object -Unique) -join " | ")
+    return (@($parts | Select-Object -Unique) -join " <- ")
 }
 
 function Get-InnermostException {
@@ -110,8 +125,11 @@ function Get-ActiveProject {
         if (-not $Script:UmacReloadLogged) { Write-UmacLog (T "LogUmacProjectReloaded") }
         $Script:UmacReloadLogged = $true
     }
-    $projects = $state.TiaPortal.Projects
-    if ($projects.Count -eq 0) { throw (T "MsgNoProject") }
+    # L'instance TIA elle-meme peut avoir ete fermee (session Openness perdue).
+    $projects = $null
+    try { $projects = $state.TiaPortal.GetType().GetProperty("Projects").GetValue($state.TiaPortal, $null) } catch {}
+    if ($null -eq $projects) { throw (T "MsgUmacSessionLost") }
+    if (@($projects).Length -eq 0) { throw (T "MsgNoProject") }
     $project = $projects[0]
     Set-AppStateValue -Key "CurrentProject" -Value $project
     return $project
@@ -532,7 +550,9 @@ function Import-UmacConfig {
     param(
         [string]$Path,
         [bool]$Commit,
-        [System.Security.SecureString]$InitialPassword
+        [System.Security.SecureString]$InitialPassword,
+        # Sans transaction : chaque ecriture est immediate (pas d'annulation globale si echec).
+        [bool]$UseTransaction = $true
     )
 
     $bundle = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -560,8 +580,12 @@ function Import-UmacConfig {
     try {
         if ($Commit) {
             $ea = (Get-AppState).TiaPortal.ExclusiveAccess((T "UmacExclusiveAccess"))
-            $step = "Transaction"
-            $tr = $ea.Transaction((Get-ActiveProject), "Import users & roles")
+            if ($UseTransaction) {
+                $step = "Transaction"
+                $tr = $ea.Transaction((Get-ActiveProject), "Import users & roles")
+            } else {
+                Write-UmacLog (T "LogUmacNoTransaction")
+            }
         }
         $step = "lecture initiale"
         $ctx = Get-UmacImportContext -Kind 'CustomRole' -Prefer 'Custom' -Planned $planned
@@ -628,7 +652,7 @@ function Import-UmacConfig {
         }
 
         $step = "validation de la transaction"
-        if ($Commit) { $tr.CommitOnDispose() }
+        if ($tr) { $tr.CommitOnDispose() }
     } catch {
         $msg = (Get-InnermostException $_.Exception).Message
         if ($msg -match 'disposed') { $msg += "`n`n" + (T "MsgUmacSessionLost") }
