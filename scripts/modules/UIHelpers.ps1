@@ -169,6 +169,7 @@ function New-UmacListItem {
         Group      = @{ Key = "KindGroup";      Fg = "#F59E0B"; Bg = "#FEF3C7" }
         CustomRole = @{ Key = "KindCustomRole"; Fg = "#27AE60"; Bg = "#E8F8E8" }
         SystemRole = @{ Key = "KindSystemRole"; Fg = "#6B7280"; Bg = "#EDF2F7" }
+        CustomRight = @{ Key = "KindCustomRight"; Fg = "#7C3AED"; Bg = "#EDE9FE" }
     }
     $style = if ($styles.ContainsKey($Item.Kind)) { $styles[$Item.Kind] } else { $styles.SystemRole }
 
@@ -232,6 +233,14 @@ function New-UmacListItem {
         if ($names.Length -eq 0) { continue }
         $summary += "${key}: $($names.Length)"
         $detail += "${key}: $($names -join ', ')"
+    }
+    # Droits runtime par appareil (roles personnalises).
+    if ($Item.ContainsKey('DeviceRights')) {
+        foreach ($key in $Item.DeviceRights.Keys) {
+            $ids = @($Item.DeviceRights[$key])
+            $summary += "Runtime ${key}: $($ids.Length)"
+            $detail += "Runtime ${key}: $($ids -join ', ')"
+        }
     }
     $txtRel = New-Object System.Windows.Controls.TextBlock
     $txtRel.Text = $summary -join "  -  "

@@ -175,6 +175,8 @@ function Get-UmacKind {
     if ($Text -match 'Role') { return 'CustomRole' }
     if ($Text -match 'Group') { return 'Group' }
     if ($Text -match 'User') { return 'User' }
+    # Droits runtime definis par l'utilisateur (a creer avant de les affecter aux roles).
+    if ($Text -match 'CustomDeviceFunctionRight') { return 'CustomRight' }
     if ($Text -match 'Right') { return 'Right' }
     return 'Other'
 }
@@ -222,6 +224,17 @@ function Read-UmacItem {
             }
         }
     } catch {}
+    # Proprietes simples absentes des attributs Openness (ex. Group / Comment d'un droit
+    # runtime personnalise, qui n'expose pas GetAttributeInfos).
+    foreach ($prop in $Obj.GetType().GetProperties()) {
+        if ($prop.GetIndexParameters().Length -gt 0 -or $attrs.Contains($prop.Name)) { continue }
+        $pt = $prop.PropertyType
+        if (-not ($pt -eq [string] -or $pt.IsPrimitive -or $pt.IsEnum)) { continue }
+        try {
+            $v = $prop.GetValue($Obj, $null)
+            $attrs[$prop.Name] = if ($null -eq $v) { $null } else { [string]$v }
+        } catch {}
+    }
 
     $relations = [ordered]@{}
     foreach ($prop in $Obj.GetType().GetProperties()) {
@@ -255,6 +268,8 @@ function Get-UmacItems {
     # ne sont pas listes (ils sont fixes) : ils servent seulement a resoudre les affectations.
     $cfg = Get-UmacConfigurator
     $items = @()
+    $devices = @(Get-UmacDevices)
+    Write-UmacLog ((T "LogUmacDevices") -f $devices.Length, (($devices | ForEach-Object { $_.Key }) -join ", "))
 
     foreach ($comp in @(Get-UmacCompositions -Configurator $cfg)) {
         if ($comp.Kind -eq 'Right' -or $comp.Kind -eq 'Other') { continue }
@@ -267,7 +282,11 @@ function Get-UmacItems {
         $count = 0
         try {
             foreach ($obj in $comp.Value) {
-                $items += Read-UmacItem -Obj $obj -Source $comp.Name -Kind $comp.Kind
+                $item = Read-UmacItem -Obj $obj -Source $comp.Name -Kind $comp.Kind
+                if ($comp.Kind -eq 'CustomRole') {
+                    $item.DeviceRights = Get-UmacRoleDeviceRights -Role $obj -Devices $devices
+                }
+                $items += $item
                 $count++
             }
         } catch {
@@ -335,6 +354,23 @@ function Get-UmacDiagnostic {
         }
     }
 
+    # Appareils porteurs de droits runtime (UmacDevice via GetService) et leurs droits.
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("===== Appareils (UmacDevice) =====")
+    try {
+        foreach ($d in @(Get-UmacDevices)) {
+            $avail = @()
+            try { foreach ($r in $d.Device.AvailableDeviceFunctionRights) { $avail += $r } } catch {}
+            [void]$sb.AppendLine("$($d.Key) [$($d.HolderType)] : $($avail.Length) droit(s) disponible(s)")
+            foreach ($r in ($avail | Select-Object -First 15)) {
+                $grp = ""; try { $grp = [string]$r.GetType().GetProperty("Group").GetValue($r, $null) } catch {}
+                [void]$sb.AppendLine("    $(Get-UmacRightIdentifier $r) | $(Get-UmacObjectName $r) | $grp")
+            }
+        }
+    } catch {
+        [void]$sb.AppendLine("  erreur : $(Format-UmacException $_.Exception)")
+    }
+
     # Tous les types publics de l'espace Umac (UmacDevice, associations de droits...).
     $umacTypes = @()
     foreach ($asm in [AppDomain]::CurrentDomain.GetAssemblies()) {
@@ -373,6 +409,252 @@ function Get-UmacDiagnostic {
     return $sb.ToString()
 }
 
+# =================== DROITS RUNTIME PAR APPAREIL ===================
+# En V21, les droits runtime d'un role sont affectes par appareil (IHM, automate) :
+# CustomRole.GetAssignedDeviceFunctionRights(UmacDevice) / AssignDeviceFunctionRight(UmacDevice,
+# DeviceFunctionRight). Aucune methode ne renvoie un UmacDevice : il s'obtient par
+# GetService<UmacDevice>() sur l'appareil, un de ses device items ou son logiciel.
+
+function Get-UmacServiceOf {
+    # Obj.GetService<Type>() par reflexion ; $null si non supporte.
+    param($Obj, [Type]$Type)
+    if ($null -eq $Obj) { return $null }
+    $m = $Obj.GetType().GetMethods() |
+        Where-Object { $_.Name -eq 'GetService' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Length -eq 0 } |
+        Select-Object -First 1
+    if (-not $m) { return $null }
+    $r = $null
+    try { $r = $m.MakeGenericMethod($Type).Invoke($Obj, $null) } catch {}
+    if ($null -eq $r) { return $null }
+    return ,$r
+}
+
+function Get-UmacDeviceHolders {
+    # Device items d'un appareil, recursivement.
+    param($Items)
+    $result = @()
+    foreach ($it in $Items) {
+        $result += $it
+        try { $result += @(Get-UmacDeviceHolders -Items $it.DeviceItems) } catch {}
+    }
+    return $result
+}
+
+function Get-UmacDevices {
+    # Appareils du projet porteurs de droits runtime : @{ Key; HolderType; Device }.
+    # Cle = "<appareil>" ou "<appareil>/<device item>" : stable d'un projet a sa copie.
+    $type = Find-LoadedType -FullName "Siemens.Engineering.Umac.UmacDevice"
+    if (-not $type) { return @() }
+    $project = Get-ActiveProject
+    $result = @()
+    $swType = Find-LoadedType -FullName "Siemens.Engineering.HW.Features.SoftwareContainer"
+    $allDevices = @()
+    try { $allDevices = @(Get-AllProjectDevices -Project $project) }
+    catch { Write-UmacLog ((T "LogUmacDeviceReadError") -f "-", "-", (Format-UmacException $_.Exception)); return @() }
+    foreach ($device in $allDevices) {
+        $deviceName = [string](Get-UmacObjectName $device)
+        $candidates = @(@{ Key = $deviceName; Obj = $device })
+        foreach ($di in @(Get-UmacDeviceHolders -Items $device.DeviceItems)) {
+            $key = "$deviceName/$(Get-UmacObjectName $di)"
+            $candidates += @{ Key = $key; Obj = $di }
+            if ($swType) {
+                $sc = Get-UmacServiceOf -Obj $di -Type $swType
+                if ($null -ne $sc) {
+                    $sw = $null
+                    try { $sw = $sc.GetType().GetProperty("Software").GetValue($sc, $null) } catch {}
+                    if ($null -ne $sw) { $candidates += @{ Key = "$key/$(Get-UmacObjectName $sw)"; Obj = $sw } }
+                }
+            }
+        }
+        foreach ($cand in $candidates) {
+            $umacDevice = Get-UmacServiceOf -Obj $cand.Obj -Type $type
+            if ($null -ne $umacDevice) {
+                $result += @{ Key = $cand.Key; HolderType = $cand.Obj.GetType().Name; Device = $umacDevice }
+            }
+        }
+    }
+    return $result
+}
+
+function Get-UmacAvailableRights {
+    # UmacDevice.AvailableDeviceFunctionRights par reflexion : un acces direct a la propriete
+    # renverrait $null sur un objet invalide (PowerShell avale l'exception de l'accesseur)
+    # au lieu de lever "disposed", ce qui empecherait la relecture.
+    param($Device)
+    return ,($Device.GetType().GetProperty("AvailableDeviceFunctionRights").GetValue($Device, $null))
+}
+
+function Find-UmacDeviceRight {
+    # Droit disponible sur l'appareil : par identifiant, sinon par nom pour un droit runtime
+    # personnalise (son identifiant peut differer dans le projet cible).
+    param($Available, [string]$Identifier, [hashtable]$CustomNames)
+    $right = $Available.Find($Identifier)
+    if ($null -eq $right -and $CustomNames -and $CustomNames.ContainsKey($Identifier)) {
+        $wantedName = $CustomNames[$Identifier]
+        foreach ($r in $Available) { if ((Get-UmacObjectName $r) -eq $wantedName) { $right = $r; break } }
+    }
+    return $right
+}
+
+function Get-UmacRightIdentifier {
+    param($Right)
+    try { $id = $Right.GetType().GetProperty("Identifier").GetValue($Right, $null); if ($id) { return [string]$id } } catch {}
+    return Get-UmacObjectName $Right
+}
+
+function Get-UmacRoleDeviceRights {
+    # Droits runtime affectes a un role personnalise, par appareil : { cle: [identifiants] }.
+    param($Role, [array]$Devices)
+    $result = [ordered]@{}
+    foreach ($d in $Devices) {
+        try {
+            $ids = @()
+            foreach ($r in $Role.GetAssignedDeviceFunctionRights($d.Device)) { $ids += (Get-UmacRightIdentifier $r) }
+            if ($ids.Length -gt 0) { $result[$d.Key] = $ids }
+        } catch {
+            Write-UmacLog ((T "LogUmacDeviceReadError") -f (Get-UmacObjectName $Role), $d.Key, (Format-UmacException $_.Exception))
+        }
+    }
+    return $result
+}
+
+function Set-UmacDeviceRights {
+    # Rejoue les droits runtime exportes d'un role personnalise (ou les simule). Role et
+    # appareil sont relus si une ecriture les a invalides ("disposed"), une fois par droit.
+    # $CustomNames : identifiant source -> nom des droits runtime personnalises du fichier ;
+    # $PlannedRights : identifiants des droits perso. qui seraient crees (simulation).
+    param([string]$RoleName, $Item, [bool]$Commit, [hashtable]$CustomNames, [array]$PlannedRights)
+
+    $stats = @{ Assigned = 0; Failed = 0 }
+    if (-not $Item.PSObject.Properties['deviceRights'] -or -not $Item.deviceRights) { return $stats }
+    $wantedByDevice = @($Item.deviceRights.PSObject.Properties | Where-Object { @($_.Value).Length -gt 0 })
+    if ($wantedByDevice.Length -eq 0) { return $stats }
+
+    $devices = @(Get-UmacDevices)
+    foreach ($entry in $wantedByDevice) {
+        $wanted = @($entry.Value | Where-Object { $_ })
+        $dev = $devices | Where-Object { $_.Key -eq $entry.Name } | Select-Object -First 1
+        if (-not $dev) {
+            Write-UmacLog ((T "LogUmacDeviceMissing") -f $RoleName, $entry.Name, $wanted.Length)
+            $stats.Failed += $wanted.Length
+            continue
+        }
+
+        $ctx = Get-UmacImportContext -Kind 'CustomRole' -Prefer 'Custom' -Planned @()
+        $role = if ($ctx.Existing.ContainsKey($RoleName)) { $ctx.Existing[$RoleName] } else { $null }
+        $assigned = @()
+        if ($null -ne $role) {
+            try { foreach ($r in $role.GetAssignedDeviceFunctionRights($dev.Device)) { $assigned += (Get-UmacRightIdentifier $r) } } catch {}
+        }
+        # Comparaison sur l'identifiant resolu dans ce projet (un droit perso. retrouve par son
+        # nom peut y avoir un autre identifiant) : evite de reaffecter un droit deja present.
+        $available = Get-UmacAvailableRights $dev.Device
+        $todo = @($wanted | Where-Object {
+            $resolved = Find-UmacDeviceRight -Available $available -Identifier $_ -CustomNames $CustomNames
+            $effectiveId = if ($null -ne $resolved) { Get-UmacRightIdentifier $resolved } else { $_ }
+            $assigned -notcontains $effectiveId })
+        if ($todo.Length -eq 0) { continue }
+        $unknown = @($todo | Where-Object {
+            $null -eq (Find-UmacDeviceRight -Available $available -Identifier $_ -CustomNames $CustomNames) -and
+            @($PlannedRights) -notcontains $_ })
+
+        if (-not $Commit) {
+            Write-UmacLog ((T "LogUmacDevicePlan") -f $RoleName, $entry.Name, $todo.Length, $unknown.Length)
+            continue
+        }
+
+        $errors = @()
+        foreach ($id in $todo) {
+            $done = $false
+            for ($attempt = 1; $attempt -le 2 -and -not $done; $attempt++) {
+                try {
+                    if ($attempt -gt 1) {
+                        # Objets invalides par l'ecriture precedente : relecture role + appareil.
+                        $ctx = Get-UmacImportContext -Kind 'CustomRole' -Prefer 'Custom' -Planned @()
+                        $role = $ctx.Existing[$RoleName]
+                        $dev = @(Get-UmacDevices) | Where-Object { $_.Key -eq $entry.Name } | Select-Object -First 1
+                    }
+                    $right = Find-UmacDeviceRight -Available (Get-UmacAvailableRights $dev.Device) -Identifier $id -CustomNames $CustomNames
+                    if ($null -eq $right) { throw (T "MsgUmacNotFound") }
+                    $role.AssignDeviceFunctionRight($dev.Device, $right)
+                    $done = $true
+                    $stats.Assigned++
+                } catch {
+                    $msg = Format-UmacException $_.Exception
+                    if ($attempt -eq 1 -and $msg -match 'disposed') { continue }
+                    $stats.Failed++
+                    $errors += "$id : $msg"
+                    $done = $true
+                }
+            }
+        }
+        Write-UmacLog ((T "LogUmacDeviceDone") -f $RoleName, $entry.Name, ($todo.Length - $errors.Length), $errors.Length)
+        foreach ($e in ($errors | Select-Object -First 5)) { Write-UmacLog "      $e" }
+    }
+    return $stats
+}
+
+# Reglages restaures apres creation (le nom et le mot de passe sont donnes a Create).
+$Script:UmacSettings = @('Comment', 'AliasName', 'SessionTimeOut', 'IsActive', 'IsRuntimeSessionTimeoutActive')
+
+function Set-UmacSettings {
+    # Reapplique les reglages exportes (commentaire, alias, delai de session, actif...) sur
+    # l'element cible, via les methodes dediees de l'API (SetAliasName, Activate...) ou la
+    # propriete. En simulation, liste seulement les reglages qui changeraient.
+    param($Target, $Item, [bool]$Commit)
+
+    $stats = @{ Assigned = 0; Failed = 0 }
+    if (-not $Item.PSObject.Properties['attributes'] -or -not $Item.attributes) { return $stats }
+    $changes = @()
+    foreach ($name in $Script:UmacSettings) {
+        $attr = $Item.attributes.PSObject.Properties[$name]
+        if (-not $attr -or $null -eq $attr.Value) { continue }
+        $current = $null
+        $prop = $null
+        if ($null -ne $Target) {
+            $prop = $Target.GetType().GetProperty($name)
+            if (-not $prop) { continue }
+            try { $current = $prop.GetValue($Target, $null) } catch {}
+            if ([string]$current -eq [string]$attr.Value) { continue }
+        }
+        $changes += @{ Name = $name; Value = [string]$attr.Value; Prop = $prop }
+    }
+    if ($changes.Length -eq 0) { return $stats }
+    if (-not $Commit -or $null -eq $Target) {
+        Write-UmacLog ((T "LogUmacSettingsPlan") -f $Item.name, (($changes | ForEach-Object { $_.Name }) -join ", "))
+        return $stats
+    }
+
+    $errors = @()
+    foreach ($ch in $changes) {
+        try {
+            $value = $ch.Value
+            switch ($ch.Name) {
+                'IsActive' {
+                    if ($value -eq 'True') { $Target.Activate() } else { $Target.Deactivate() }
+                }
+                'IsRuntimeSessionTimeoutActive' {
+                    if ($value -eq 'True') { $Target.ActivateRuntimeSessionTimeout() } else { $Target.DeactivateRuntimeSessionTimeout() }
+                }
+                'AliasName' { $Target.SetAliasName($value) }
+                default {
+                    $pt = $ch.Prop.PropertyType
+                    $typed = if ($pt -eq [string]) { $value } else { [Convert]::ChangeType($value, $pt, [Globalization.CultureInfo]::InvariantCulture) }
+                    if ($ch.Prop.CanWrite) { $ch.Prop.SetValue($Target, $typed, $null) }
+                    else { $Target.SetAttribute($ch.Name, $typed) }
+                }
+            }
+            $stats.Assigned++
+        } catch {
+            $stats.Failed++
+            $errors += "$($ch.Name) : $(Format-UmacException $_.Exception)"
+        }
+    }
+    Write-UmacLog ((T "LogUmacSettingsDone") -f $Item.name, ($changes.Length - $errors.Length), $errors.Length)
+    foreach ($e in $errors) { Write-UmacLog "      $e" }
+    return $stats
+}
+
 function Export-UmacConfig {
     param([string]$Path)
 
@@ -392,6 +674,8 @@ function Export-UmacConfig {
                 name       = $_.Name
                 attributes = $_.Attributes
                 relations  = $_.Relations
+                # Droits runtime par appareil : { "<appareil>": [identifiants] }
+                deviceRights = $(if ($_.ContainsKey('DeviceRights')) { $_.DeviceRights } else { [ordered]@{} })
             }
         })
     }
@@ -613,10 +897,18 @@ function Import-UmacConfig {
     $items = @($bundle.items)
     $roles = @($items | Where-Object { $_.kind -eq 'CustomRole' })
     $users = @($items | Where-Object { $_.kind -eq 'User' })
-    $ignored = $items.Length - $roles.Length - $users.Length
+    $rights = @($items | Where-Object { $_.kind -eq 'CustomRight' })
+    $ignored = $items.Length - $roles.Length - $users.Length - $rights.Length
     $systemRoles = @($items | Where-Object { $_.kind -eq 'SystemRole' } | ForEach-Object { [string]$_.name })
+    # Droits runtime perso. du fichier : identifiant source -> nom (resolution par nom).
+    $customNames = @{}
+    foreach ($r in $rights) {
+        $idAttr = $r.attributes.PSObject.Properties['Identifier']
+        if ($idAttr -and $idAttr.Value) { $customNames[[string]$idAttr.Value] = [string]$r.name }
+    }
+    $plannedRights = @()
     $mode = if ($Commit) { T "LogUmacModeCommit" } else { T "LogUmacModeDryRun" }
-    Write-UmacLog ((T "LogUmacImportStart") -f $roles.Length, $users.Length, $ignored, $mode)
+    Write-UmacLog ((T "LogUmacImportStart") -f $rights.Length, $roles.Length, $users.Length, $ignored, $mode)
 
     $summary = @{ Created = 0; Existing = 0; Failed = 0; Assigned = 0; AssignFailed = 0 }
     $planned = @()
@@ -643,8 +935,10 @@ function Import-UmacConfig {
             $(if ($null -ne $ctx.Comp) { $ctx.Comp.GetType().Name } else { "-" }),
             $(if ($null -ne $userCtx.Comp) { $userCtx.Comp.GetType().Name } else { "-" }))
 
-        # Les roles d'abord : les utilisateurs y font reference.
-        foreach ($group in @(@{ Items = $roles; Kind = 'CustomRole'; Prefer = 'Custom' },
+        # Ordre de dependance : droits runtime perso. (affectes aux roles), roles (affectes
+        # aux utilisateurs), puis utilisateurs.
+        foreach ($group in @(@{ Items = $rights; Kind = 'CustomRight'; Prefer = 'CustomDevice' },
+                             @{ Items = $roles; Kind = 'CustomRole'; Prefer = 'Custom' },
                              @{ Items = $users; Kind = 'User'; Prefer = 'Project' })) {
             foreach ($item in $group.Items) {
                 $name = [string]$item.name
@@ -673,6 +967,9 @@ function Import-UmacConfig {
                     Write-UmacLog ((T "LogUmacExists") -f $item.kind, $name)
                 } elseif (-not $Commit) {
                     $planned += $name
+                    if ($group.Kind -eq 'CustomRight') {
+                        $plannedRights += @($customNames.Keys | Where-Object { $customNames[$_] -eq $name })
+                    }
                     Write-UmacLog ((T "LogUmacWouldCreate") -f $item.kind, $name)
                 } else {
                     $step = "$($item.kind) '$name' : creation"
@@ -698,6 +995,27 @@ function Import-UmacConfig {
                 $rel = Set-UmacRelations -Target $target -Item $item -Lookup $lookup -Commit $Commit -RefreshKind $group.Kind -RefreshPrefer $group.Prefer -SkipNames $systemRoles
                 $summary.Assigned += $rel.Assigned
                 $summary.AssignFailed += $rel.Failed
+
+                # Reglages (commentaire, alias, delai de session...) sur la cible relue.
+                $step = "$($item.kind) '$name' : reglages"
+                if ($Commit) {
+                    $fresh = Get-UmacImportContext -Kind $group.Kind -Prefer $group.Prefer -Planned @()
+                    if ($fresh.Existing.ContainsKey($name)) { $target = $fresh.Existing[$name] }
+                }
+                if ($group.Kind -ne 'CustomRight') {
+                    $set = Set-UmacSettings -Target $target -Item $item -Commit $Commit
+                    $summary.Assigned += $set.Assigned
+                    $summary.AssignFailed += $set.Failed
+                }
+
+                # Droits runtime par appareil des roles personnalises.
+                if ($group.Kind -eq 'CustomRole') {
+                    $step = "$($item.kind) '$name' : droits runtime"
+                    $dr = Set-UmacDeviceRights -RoleName $name -Item $item -Commit $Commit `
+                        -CustomNames $customNames -PlannedRights $plannedRights
+                    $summary.Assigned += $dr.Assigned
+                    $summary.AssignFailed += $dr.Failed
+                }
             }
         }
 
