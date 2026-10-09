@@ -1,4 +1,4 @@
-# Localization.ps1 - Multi-language support (FR, EN, ES, IT)
+﻿# Localization.ps1 - Multi-language support (FR, EN, ES, IT)
 
 $Script:CurrentLanguage = "FR"
 
@@ -186,6 +186,7 @@ $Script:Strings = @{
         LogUmacRelPlan    = "      {0} / {1} : {2} a affecter, dont {3} introuvable(s) dans ce projet"
         LogUmacRelDone    = "      {0} / {1} : {2} affecte(s), {3} echec(s)"
         LogUmacRelMissing = "      {0} / {1} : relation absente sur l'objet cible, ignoree"
+        LogUmacRelSkipSystem = "      {0} / {1} : role(s) systeme non affecte(s) : {2}"
         LogUmacImportDone = "[OK] Crees : {0}, deja presents : {1}, echecs : {2}, affectations : {3} (echecs : {4})"
 
         # --- Language ---
@@ -375,6 +376,7 @@ $Script:Strings = @{
         LogUmacRelPlan    = "      {0} / {1}: {2} to assign, {3} not found in this project"
         LogUmacRelDone    = "      {0} / {1}: {2} assigned, {3} failed"
         LogUmacRelMissing = "      {0} / {1}: relation missing on the target object, skipped"
+        LogUmacRelSkipSystem = "      {0} / {1}: system role(s) not assigned: {2}"
         LogUmacImportDone = "[OK] Created: {0}, already present: {1}, failed: {2}, assignments: {3} (failed: {4})"
 
         # --- Language ---

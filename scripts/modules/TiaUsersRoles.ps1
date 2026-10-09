@@ -367,13 +367,21 @@ function Add-UmacRelationMember {
 
 function Set-UmacRelations {
     # Rejoue les relations exportees d'un element sur l'objet cible (ou les simule).
-    param($Target, $Item, [hashtable]$Lookup, [bool]$Commit)
+    # En ecriture, si -RefreshKind est donne, l'etat (cible + index) est relu avant chaque
+    # affectation : une ecriture peut invalider la cible et les objets resolus juste avant.
+    param($Target, $Item, [hashtable]$Lookup, [bool]$Commit, [string]$RefreshKind, [string]$RefreshPrefer, [array]$SkipNames)
 
     $stats = @{ Assigned = 0; Failed = 0 }
     if (-not $Item.PSObject.Properties['relations'] -or -not $Item.relations) { return $stats }
 
     foreach ($rel in $Item.relations.PSObject.Properties) {
         $wanted = @($rel.Value | Where-Object { $_ })
+        # Les roles systeme ne sont jamais ecrits (ni crees, ni affectes).
+        $skipped = @($wanted | Where-Object { @($SkipNames) -contains $_ })
+        if ($skipped.Length -gt 0) {
+            Write-UmacLog ((T "LogUmacRelSkipSystem") -f $Item.name, $rel.Name, ($skipped -join ", "))
+            $wanted = @($wanted | Where-Object { @($SkipNames) -notcontains $_ })
+        }
         if ($wanted.Length -eq 0) { continue }
 
         $existing = @()
@@ -404,9 +412,19 @@ function Set-UmacRelations {
 
         $errors = @()
         foreach ($name in $todo) {
-            $candidates = if ($Lookup.ContainsKey($name)) { @($Lookup[$name]) } else { @() }
             try {
-                Add-UmacRelationMember -Collection $coll -Name $name -Candidates $candidates
+                $currentLookup = $Lookup
+                $currentColl = $coll
+                if ($Commit -and $RefreshKind) {
+                    $fresh = Get-UmacImportContext -Kind $RefreshKind -Prefer $RefreshPrefer -Planned @()
+                    $currentLookup = $fresh.Lookup
+                    $freshTarget = $fresh.Existing[[string]$Item.name]
+                    if ($null -ne $freshTarget) {
+                        $currentColl = $freshTarget.GetType().GetProperty($rel.Name).GetValue($freshTarget, $null)
+                    }
+                }
+                $candidates = if ($currentLookup.ContainsKey($name)) { @($currentLookup[$name]) } else { @() }
+                Add-UmacRelationMember -Collection $currentColl -Name $name -Candidates $candidates
                 $stats.Assigned++
             } catch {
                 $stats.Failed++
@@ -430,6 +448,23 @@ function Find-UmacComposition {
     return $null
 }
 
+function Get-UmacImportContext {
+    # Etat courant pour importer un element : composition cible, index nom -> objets de toutes
+    # les compositions, et elements deja presents dans la cible.
+    param([string]$Kind, [string]$Prefer, [array]$Planned)
+
+    $comps = @(Get-UmacCompositions -Configurator (Get-UmacConfigurator))
+    $comp = Find-UmacComposition -Compositions $comps -Kind $Kind -Prefer $Prefer
+    $lookup = New-UmacLookup -Compositions $comps
+    # En simulation, les roles qui seraient crees comptent comme resolvables.
+    foreach ($p in @($Planned)) { if ($p -and -not $lookup.ContainsKey($p)) { $lookup[$p] = @() } }
+    $existing = @{}
+    if ($null -ne $comp) {
+        foreach ($o in $comp) { $existing[(Get-UmacObjectName $o)] = $o }
+    }
+    return @{ Comp = $comp; Lookup = $lookup; Existing = $existing }
+}
+
 function Import-UmacConfig {
     # Importe les roles personnalises puis les utilisateurs (avec leurs relations) depuis un
     # fichier produit par Export-UmacConfig. Sans -Commit : simulation, rien n'est ecrit.
@@ -450,16 +485,9 @@ function Import-UmacConfig {
     $roles = @($items | Where-Object { $_.kind -eq 'CustomRole' })
     $users = @($items | Where-Object { $_.kind -eq 'User' })
     $ignored = $items.Length - $roles.Length - $users.Length
+    $systemRoles = @($items | Where-Object { $_.kind -eq 'SystemRole' } | ForEach-Object { [string]$_.name })
     $mode = if ($Commit) { T "LogUmacModeCommit" } else { T "LogUmacModeDryRun" }
     Write-UmacLog ((T "LogUmacImportStart") -f $roles.Length, $users.Length, $ignored, $mode)
-
-    $cfg = Get-UmacConfigurator
-    $comps = @(Get-UmacCompositions -Configurator $cfg)
-    $roleComp = Find-UmacComposition -Compositions $comps -Kind 'CustomRole' -Prefer 'Custom'
-    $userComp = Find-UmacComposition -Compositions $comps -Kind 'User' -Prefer 'Project'
-    Write-UmacLog ((T "LogUmacTargets") -f
-        $(if ($null -ne $roleComp) { $roleComp.GetType().Name } else { "-" }),
-        $(if ($null -ne $userComp) { $userComp.GetType().Name } else { "-" }))
 
     $summary = @{ Created = 0; Existing = 0; Failed = 0; Assigned = 0; AssignFailed = 0 }
     $planned = @()
@@ -472,30 +500,33 @@ function Import-UmacConfig {
         $tr = $ea.Transaction($state.CurrentProject, "Import users & roles")
     }
     try {
+        $ctx = Get-UmacImportContext -Kind 'CustomRole' -Prefer 'Custom' -Planned $planned
+        $userCtx = Get-UmacImportContext -Kind 'User' -Prefer 'Project' -Planned $planned
+        Write-UmacLog ((T "LogUmacTargets") -f
+            $(if ($null -ne $ctx.Comp) { $ctx.Comp.GetType().Name } else { "-" }),
+            $(if ($null -ne $userCtx.Comp) { $userCtx.Comp.GetType().Name } else { "-" }))
+
         # Les roles d'abord : les utilisateurs y font reference.
-        foreach ($group in @(@{ Items = $roles; Comp = $roleComp }, @{ Items = $users; Comp = $userComp })) {
-            if ($group.Items.Length -eq 0) { continue }
-            if ($null -eq $group.Comp) {
-                Write-UmacLog (T "LogUmacNoTarget")
-                $summary.Failed += $group.Items.Length
-                continue
-            }
-
-            # Index rafraichi a chaque groupe : les roles crees doivent etre resolvables
-            # lors de l'affectation des roles aux utilisateurs.
-            $lookup = New-UmacLookup -Compositions @(Get-UmacCompositions -Configurator $cfg)
-            # En simulation, les roles qui seraient crees comptent comme resolvables.
-            foreach ($p in $planned) { if (-not $lookup.ContainsKey($p)) { $lookup[$p] = @() } }
-            $existing = @{}
-            foreach ($o in $group.Comp) { $existing[(Get-UmacObjectName $o)] = $o }
-
+        foreach ($group in @(@{ Items = $roles; Kind = 'CustomRole'; Prefer = 'Custom' },
+                             @{ Items = $users; Kind = 'User'; Prefer = 'Project' })) {
             foreach ($item in $group.Items) {
                 $name = [string]$item.name
                 if (-not $name) { continue }
 
+                # Compositions relues a chaque element : TIA Portal invalide les objets
+                # Openness obtenus avant une ecriture ("Access to a disposed object").
+                # L'index relu rend aussi resolvables les roles crees juste avant.
+                $ctx = Get-UmacImportContext -Kind $group.Kind -Prefer $group.Prefer -Planned $planned
+                if ($null -eq $ctx.Comp) {
+                    Write-UmacLog (T "LogUmacNoTarget")
+                    $summary.Failed++
+                    continue
+                }
+                $lookup = $ctx.Lookup
+
                 $target = $null
-                if ($existing.ContainsKey($name)) {
-                    $target = $existing[$name]
+                if ($ctx.Existing.ContainsKey($name)) {
+                    $target = $ctx.Existing[$name]
                     $summary.Existing++
                     Write-UmacLog ((T "LogUmacExists") -f $item.kind, $name)
                 } elseif (-not $Commit) {
@@ -503,7 +534,7 @@ function Import-UmacConfig {
                     Write-UmacLog ((T "LogUmacWouldCreate") -f $item.kind, $name)
                 } else {
                     try {
-                        $target = Invoke-UmacCreate -Composition $group.Comp -Name $name -Password $InitialPassword
+                        $target = Invoke-UmacCreate -Composition $ctx.Comp -Name $name -Password $InitialPassword
                         $summary.Created++
                         Write-UmacLog ((T "LogUmacCreated") -f $item.kind, $name)
                     } catch {
@@ -513,7 +544,13 @@ function Import-UmacConfig {
                     }
                 }
 
-                $rel = Set-UmacRelations -Target $target -Item $item -Lookup $lookup -Commit $Commit
+                if ($Commit) {
+                    # La creation a pu invalider les objets lus avant : relire cible et index.
+                    $fresh = Get-UmacImportContext -Kind $group.Kind -Prefer $group.Prefer -Planned @()
+                    $lookup = $fresh.Lookup
+                    if ($fresh.Existing.ContainsKey($name)) { $target = $fresh.Existing[$name] }
+                }
+                $rel = Set-UmacRelations -Target $target -Item $item -Lookup $lookup -Commit $Commit -RefreshKind $group.Kind -RefreshPrefer $group.Prefer -SkipNames $systemRoles
                 $summary.Assigned += $rel.Assigned
                 $summary.AssignFailed += $rel.Failed
             }

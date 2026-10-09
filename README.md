@@ -157,7 +157,8 @@ Points d'attention :
 - Les mots de passe ne sont pas exportables : les utilisateurs locaux crees recoivent le
   **mot de passe initial** saisi dans la page.
 - Les elements deja presents (meme nom) ne sont pas recrees ; seules les affectations manquantes
-  sont ajoutees. Les roles systeme et groupes ne sont pas crees, mais restent affectables.
+  sont ajoutees. Les **roles systeme ne sont jamais ecrits** : ni crees, ni modifies, ni affectes
+  aux utilisateurs importes (signale dans le journal). Les groupes ne sont pas crees.
 - L'API UMAC differe selon les versions : tout passe par reflexion. En cas d'echec, le bouton
   **Diagnostic** affiche dans le journal le modele objet reel de l'installation.
 
